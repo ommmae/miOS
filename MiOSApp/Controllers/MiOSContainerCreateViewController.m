@@ -1318,7 +1318,6 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
         NSString *title = [NSString stringWithFormat:@"%ldGB", (long)gb];
 
         UIButton *pill = [UIButton buttonWithType:UIButtonTypeSystem];
-        pill.translatesAutoresizingMaskIntoConstraints = NO;
         pill.tag = 600 + i;
         [pill setTitle:title forState:UIControlStateNormal];
         pill.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
@@ -1335,14 +1334,13 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
             [pill setTitleColor:[MiOSTheme accentColor] forState:UIControlStateNormal];
         }
 
-        [pill sizeToFit];
-        CGFloat w = pill.intrinsicContentSize.width + 32;
-        pill.frame = CGRectMake(x, 0, w, pillHeight);
+        CGFloat w = MAX([pill sizeThatFits:CGSizeMake(CGFLOAT_MAX, pillHeight)].width, 64);
+        pill.frame = CGRectMake(x, 3, w, pillHeight);
         [scrollView addSubview:pill];
         x += w + spacing;
     }
 
-    scrollView.contentSize = CGSizeMake(x, pillHeight);
+    scrollView.contentSize = CGSizeMake(MAX(x - spacing, 0), pillHeight + 6);
 }
 
 - (void)storagePillTapped:(UIButton *)sender {

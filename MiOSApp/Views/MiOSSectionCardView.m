@@ -59,12 +59,24 @@
 }
 
 - (void)addSeparator {
-    UIView *sep = [[UIView alloc] init];
-    sep.translatesAutoresizingMaskIntoConstraints = NO;
-    sep.backgroundColor = [MiOSTheme separator];
-    [_contentStack addArrangedSubview:sep];
-    [sep.heightAnchor constraintEqualToConstant:0.5].active = YES;
-    [sep.leadingAnchor constraintEqualToAnchor:_contentStack.leadingAnchor constant:54].active = YES;
+    // The inset line lives inside a full-width wrapper: constraining an arranged subview's
+    // leading edge directly fights the stack view's fill alignment and shifts every row.
+    UIView *wrapper = [[UIView alloc] init];
+    wrapper.translatesAutoresizingMaskIntoConstraints = NO;
+    [_contentStack addArrangedSubview:wrapper];
+
+    UIView *line = [[UIView alloc] init];
+    line.translatesAutoresizingMaskIntoConstraints = NO;
+    line.backgroundColor = [MiOSTheme separator];
+    [wrapper addSubview:line];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [wrapper.heightAnchor constraintEqualToConstant:0.5],
+        [line.topAnchor constraintEqualToAnchor:wrapper.topAnchor],
+        [line.bottomAnchor constraintEqualToAnchor:wrapper.bottomAnchor],
+        [line.leadingAnchor constraintEqualToAnchor:wrapper.leadingAnchor constant:54],
+        [line.trailingAnchor constraintEqualToAnchor:wrapper.trailingAnchor],
+    ]];
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection *)prev {

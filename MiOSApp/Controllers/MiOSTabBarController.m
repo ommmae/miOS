@@ -4,78 +4,69 @@
 #import "MiOSCloudViewController.h"
 #import "MiOSProxiesViewController.h"
 #import "MiOSSettingsViewController.h"
+#import "../Views/MiOSFloatingTabBar.h"
 #import "../UI/MiOSTheme.h"
 
-@implementation MiOSTabBarController
+@implementation MiOSTabBarController {
+    MiOSFloatingTabBar *_floatingBar;
+}
 
 - (void)viewDidLoad {
     [super viewDidLoad];
 
     self.viewControllers = @[
-        [self wrap:[[MiOSHomeViewController alloc] init]
-             title:@"Home" icon:@"house.fill"],
-        [self wrap:[[MiOSContainerListViewController alloc] init]
-             title:@"Containers" icon:@"folder.fill"],
-        [self wrap:[[MiOSCloudViewController alloc] init]
-             title:@"Cloud" icon:@"cloud.fill"],
-        [self wrap:[[MiOSProxiesViewController alloc] init]
-             title:@"Proxies" icon:@"wifi"],
-        [self wrap:[[MiOSSettingsViewController alloc] init]
-             title:@"Settings" icon:@"gearshape.fill"],
+        [self wrap:[[MiOSHomeViewController alloc] init]],
+        [self wrap:[[MiOSContainerListViewController alloc] init]],
+        [self wrap:[[MiOSCloudViewController alloc] init]],
+        [self wrap:[[MiOSProxiesViewController alloc] init]],
+        [self wrap:[[MiOSSettingsViewController alloc] init]],
     ];
 
-    [self styleTabBar];
+    self.tabBar.hidden = YES;
+    // Children lay out above the floating bar (the home-indicator inset is already in the safe area).
+    self.additionalSafeAreaInsets = UIEdgeInsetsMake(0, 0, MiOSFloatingTabBar.contentHeight - 8, 0);
+
+    _floatingBar = [[MiOSFloatingTabBar alloc]
+        initWithTitles:@[@"Home", @"Containers", @"Cloud", @"Proxies", @"Settings"]
+                 icons:@[@"house.fill", @"folder.fill", @"cloud.fill", @"wifi", @"gearshape.fill"]];
+    _floatingBar.selectedIndex = 0;
+    __weak typeof(self) weakSelf = self;
+    _floatingBar.onSelect = ^(NSInteger index) {
+        [weakSelf selectTab:index];
+    };
+    [self.view addSubview:_floatingBar];
 }
 
-- (UINavigationController *)wrap:(UIViewController *)vc title:(NSString *)title icon:(NSString *)icon {
+- (UINavigationController *)wrap:(UIViewController *)vc {
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
     nav.navigationBar.prefersLargeTitles = YES;
     nav.navigationBar.tintColor = [MiOSTheme accentColor];
     [MiOSTheme styleNavigationBar:nav.navigationBar];
-
-    UIImage *img = [UIImage systemImageNamed:icon];
-    nav.tabBarItem = [[UITabBarItem alloc] initWithTitle:title image:img selectedImage:img];
     return nav;
 }
 
-- (void)styleTabBar {
-    UITabBarAppearance *appearance = [[UITabBarAppearance alloc] init];
-    [appearance configureWithDefaultBackground];
-    appearance.backgroundEffect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark];
-    appearance.backgroundColor = [[MiOSTheme secondaryBackground] colorWithAlphaComponent:0.75];
-    appearance.shadowColor = [MiOSTheme accentBorderColor];
+- (void)selectTab:(NSInteger)index {
+    if (index == (NSInteger)self.selectedIndex) {
+        UINavigationController *nav = (UINavigationController *)self.selectedViewController;
+        if ([nav isKindOfClass:[UINavigationController class]]) [nav popToRootViewControllerAnimated:YES];
+        return;
+    }
+    self.selectedIndex = index;
+    [self.view bringSubviewToFront:_floatingBar];
+}
 
-    UIColor *accent = [MiOSTheme accentColor];
-    UIColor *inactive = [MiOSTheme tertiaryText];
+- (void)viewWillLayoutSubviews {
+    [super viewWillLayoutSubviews];
+    self.tabBar.hidden = YES;
+}
 
-    void (^styleItem)(UITabBarItemAppearance *) = ^(UITabBarItemAppearance *item) {
-        item.selected.iconColor = accent;
-        item.selected.titleTextAttributes = @{
-            NSForegroundColorAttributeName: accent,
-            NSFontAttributeName: [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold],
-        };
-        item.normal.iconColor = inactive;
-        item.normal.titleTextAttributes = @{
-            NSForegroundColorAttributeName: inactive,
-            NSFontAttributeName: [UIFont systemFontOfSize:10 weight:UIFontWeightMedium],
-        };
-    };
-    styleItem(appearance.stackedLayoutAppearance);
-    styleItem(appearance.inlineLayoutAppearance);
-    styleItem(appearance.compactInlineLayoutAppearance);
-
-    self.tabBar.standardAppearance = appearance;
-    self.tabBar.scrollEdgeAppearance = appearance;
-    self.tabBar.tintColor = accent;
-    self.tabBar.unselectedItemTintColor = inactive;
-
-    // Subtle top hairline + glow to give the textured floating look
-    self.tabBar.layer.borderWidth = 0.5;
-    self.tabBar.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
-    self.tabBar.layer.shadowColor = [MiOSTheme accentColor].CGColor;
-    self.tabBar.layer.shadowOffset = CGSizeMake(0, -2);
-    self.tabBar.layer.shadowRadius = 12;
-    self.tabBar.layer.shadowOpacity = 0.12;
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGFloat homeInset = self.view.window ? self.view.window.safeAreaInsets.bottom : 0;
+    CGFloat height = MiOSFloatingTabBar.contentHeight + homeInset;
+    CGRect bounds = self.view.bounds;
+    _floatingBar.frame = CGRectMake(0, bounds.size.height - height, bounds.size.width, height);
+    [self.view bringSubviewToFront:_floatingBar];
 }
 
 @end

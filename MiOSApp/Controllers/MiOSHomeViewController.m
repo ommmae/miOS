@@ -1,20 +1,27 @@
 #import "MiOSHomeViewController.h"
 #import "MiOSContainerCreateViewController.h"
-#import "MiOSContainerDetailViewController.h"
-#import "MiOSSettingsViewController.h"
 #import "../Models/MiOSContainerConfig.h"
-#import "../Models/MiOSAppInfo.h"
 #import "../UI/MiOSTheme.h"
 #import "../Utils/MiOSColorExtractor.h"
 #import "../Utils/MiOSDeviceImageRenderer.h"
-#import <objc/runtime.h>
-#import <QuartzCore/QuartzCore.h>
-
-@interface UIImage (MiOSPrivate)
-+ (UIImage *)_applicationIconImageForBundleIdentifier:(NSString *)bundleID format:(int)format scale:(CGFloat)scale;
-@end
+#import "../Utils/MiOSAppIconProvider.h"
+#import "../Views/MiOSGradientView.h"
+#import "../Views/MiOSContainerGridView.h"
 
 static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/MiOS/com.mios.core.plist";
+
+static UIColor *MiOSShiftedHue(UIColor *color, CGFloat shift, CGFloat saturation, CGFloat brightness) {
+    CGFloat h, s, b, a;
+    if (![color getHue:&h saturation:&s brightness:&b alpha:&a]) return color;
+    h = fmod(h + shift, 1.0);
+    return [UIColor colorWithHue:h saturation:saturation brightness:brightness alpha:1.0];
+}
+
+static BOOL MiOSIsLightColor(UIColor *color) {
+    CGFloat r, g, b, a;
+    [color getRed:&r green:&g blue:&b alpha:&a];
+    return (0.299 * r + 0.587 * g + 0.114 * b) > 0.68;
+}
 
 @interface MiOSHomeViewController ()
 @property (nonatomic, strong) UIScrollView *scrollView;
@@ -23,23 +30,21 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
 @property (nonatomic, strong) NSArray<MiOSContainerConfig *> *containers;
 @property (nonatomic, copy) NSString *activeContainerID;
 @property (nonatomic, strong) CAGradientLayer *bgGradientLayer;
-@property (nonatomic, strong) CAGradientLayer *glowLayer;
 @end
 
 @implementation MiOSHomeViewController
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"miOS";
+    self.title = @"Home";
     self.view.backgroundColor = [MiOSTheme primaryBackground];
-    [MiOSTheme styleNavigationBar:self.navigationController.navigationBar];
-    [self setupNavBarButtons];
     [self loadPreferences];
     [self setupUI];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+    [self.navigationController setNavigationBarHidden:YES animated:animated];
     [self loadPreferences];
     [self reloadContainers];
 }
@@ -47,38 +52,22 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     _bgGradientLayer.frame = self.view.bounds;
-    CGFloat glowSize = self.view.bounds.size.width * 1.6;
-    _glowLayer.frame = CGRectMake(self.view.bounds.size.width / 2 - glowSize / 2,
-                                  self.view.bounds.size.height - glowSize * 0.55,
-                                  glowSize, glowSize);
 }
 
-#pragma mark - Nav Bar
-
-- (void)setupNavBarButtons {
-    // Non-clickable notification bell (top-right)
-    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightSemibold];
-    UIImage *bell = [UIImage systemImageNamed:@"bell.fill" withConfiguration:cfg];
-    UIBarButtonItem *bellItem = [[UIBarButtonItem alloc] initWithImage:bell style:UIBarButtonItemStylePlain target:nil action:nil];
-    bellItem.tintColor = [MiOSTheme secondaryText];
-    self.navigationItem.rightBarButtonItem = bellItem;
+- (UIStatusBarStyle)preferredStatusBarStyle {
+    return UIStatusBarStyleLightContent;
 }
 
-#pragma mark - Preferences
+#pragma mark - Data
 
 - (void)loadPreferences {
     _corePrefs = [[NSMutableDictionary dictionaryWithContentsOfFile:kMiOSCorePrefsPath] mutableCopy];
-    if (!_corePrefs) {
-        _corePrefs = [@{@"enabled": @YES} mutableCopy];
-    }
+    if (!_corePrefs) _corePrefs = [@{@"enabled": @YES} mutableCopy];
 }
 
 - (void)savePreferences {
-    NSFileManager *fm = [NSFileManager defaultManager];
     NSString *dir = [kMiOSCorePrefsPath stringByDeletingLastPathComponent];
-    if (![fm fileExistsAtPath:dir]) {
-        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-    }
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
     [_corePrefs writeToFile:kMiOSCorePrefsPath atomically:YES];
 }
 
@@ -88,35 +77,25 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
     [self rebuildContent];
 }
 
-#pragma mark - UI Setup
+- (MiOSContainerConfig *)activeContainer {
+    for (MiOSContainerConfig *c in _containers) {
+        if ([c.identifier isEqualToString:_activeContainerID]) return c;
+    }
+    return _containers.firstObject;
+}
+
+#pragma mark - Layout
 
 - (void)setupUI {
-    // Base vertical gradient
     _bgGradientLayer = [CAGradientLayer layer];
     _bgGradientLayer.colors = @[
-        (id)[UIColor colorWithRed:0.07 green:0.07 blue:0.11 alpha:1.0].CGColor,
-        (id)[MiOSTheme primaryBackground].CGColor,
+        (id)[UIColor colorWithRed:0.11 green:0.12 blue:0.19 alpha:1.0].CGColor,
+        (id)[UIColor colorWithRed:0.05 green:0.05 blue:0.09 alpha:1.0].CGColor,
         (id)[UIColor colorWithRed:0.03 green:0.03 blue:0.05 alpha:1.0].CGColor,
     ];
-    _bgGradientLayer.locations = @[@0.0, @0.5, @1.0];
-    _bgGradientLayer.startPoint = CGPointMake(0.5, 0.0);
-    _bgGradientLayer.endPoint = CGPointMake(0.5, 1.0);
+    _bgGradientLayer.locations = @[@0.0, @0.45, @1.0];
     _bgGradientLayer.frame = self.view.bounds;
     [self.view.layer insertSublayer:_bgGradientLayer atIndex:0];
-
-    // Accent glow blooming from the bottom (screenshot-2 style)
-    _glowLayer = [CAGradientLayer layer];
-    _glowLayer.type = kCAGradientLayerRadial;
-    UIColor *accent = [MiOSTheme accentColor];
-    _glowLayer.colors = @[
-        (id)[accent colorWithAlphaComponent:0.28].CGColor,
-        (id)[accent colorWithAlphaComponent:0.10].CGColor,
-        (id)[accent colorWithAlphaComponent:0.0].CGColor,
-    ];
-    _glowLayer.locations = @[@0.0, @0.45, @1.0];
-    _glowLayer.startPoint = CGPointMake(0.5, 0.5);
-    _glowLayer.endPoint = CGPointMake(1.0, 1.0);
-    [self.view.layer insertSublayer:_glowLayer atIndex:1];
 
     _scrollView = [[UIScrollView alloc] init];
     _scrollView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -127,21 +106,19 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
     _mainStack = [[UIStackView alloc] init];
     _mainStack.translatesAutoresizingMaskIntoConstraints = NO;
     _mainStack.axis = UILayoutConstraintAxisVertical;
-    _mainStack.spacing = 18;
+    _mainStack.spacing = 22;
     [_scrollView addSubview:_mainStack];
 
     [NSLayoutConstraint activateConstraints:@[
-        [_scrollView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+        [_scrollView.topAnchor constraintEqualToAnchor:self.view.topAnchor],
         [_scrollView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [_scrollView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [_scrollView.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-        [_mainStack.topAnchor constraintEqualToAnchor:_scrollView.topAnchor constant:12],
+        [_mainStack.topAnchor constraintEqualToAnchor:_scrollView.contentLayoutGuide.topAnchor constant:8],
         [_mainStack.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:16],
         [_mainStack.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-16],
-        [_mainStack.bottomAnchor constraintEqualToAnchor:_scrollView.bottomAnchor constant:-32],
+        [_mainStack.bottomAnchor constraintEqualToAnchor:_scrollView.contentLayoutGuide.bottomAnchor constant:-24],
     ]];
-
-    [self reloadContainers];
 }
 
 - (void)rebuildContent {
@@ -150,704 +127,678 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
         [v removeFromSuperview];
     }
 
-    // 1. Active container hero (or empty prompt)
     MiOSContainerConfig *active = [self activeContainer];
+    UIColor *accent = active ? [MiOSAppIconProvider accentForBundleIDs:active.apps] : [MiOSTheme accentColor];
+
+    [_mainStack addArrangedSubview:[self buildHeaderWithAccent:accent]];
+
     if (active) {
-        [self buildActiveContainerCard:active];
-    } else if (_containers.count == 0) {
-        [self buildEmptyState];
-    }
-
-    // 2. New Container button (above the grid)
-    [self buildNewContainerButton];
-
-    // 3. Container grid
-    if (_containers.count > 0) {
-        [self buildContainerGrid];
-    }
-}
-
-- (MiOSContainerConfig *)activeContainer {
-    for (MiOSContainerConfig *c in _containers) {
-        if ([c.identifier isEqualToString:_activeContainerID]) return c;
-    }
-    return _containers.firstObject;
-}
-
-#pragma mark - App Icon Helpers
-
-- (UIImage *)iconForBundleID:(NSString *)bundleID {
-    UIImage *img = [UIImage _applicationIconImageForBundleIdentifier:bundleID format:0 scale:[UIScreen mainScreen].scale];
-    if (img) return img;
-
-    NSArray<MiOSAppInfo *> *allApps = [MiOSAppInfo allApps];
-    for (MiOSAppInfo *app in allApps) {
-        if ([app.bundleID isEqualToString:bundleID]) {
-            return app.icon;
-        }
-    }
-    return nil;
-}
-
-- (UIColor *)accentForContainer:(MiOSContainerConfig *)container {
-    UIColor *cardAccent = [MiOSTheme accentColor];
-    if (container.apps.count > 0) {
-        UIImage *firstIcon = [self iconForBundleID:container.apps.firstObject];
-        if (firstIcon) {
-            UIColor *extracted = [MiOSColorExtractor vibrantColorFromImage:firstIcon];
-            if (extracted) cardAccent = extracted;
-        }
-    }
-    return cardAccent;
-}
-
-#pragma mark - Active Container Card
-
-- (void)buildActiveContainerCard:(MiOSContainerConfig *)container {
-    BOOL enabled = [_corePrefs[@"enabled"] boolValue];
-    UIColor *accent = [self accentForContainer:container];
-    CGFloat ar, ag, ab, aa;
-    [accent getRed:&ar green:&ag blue:&ab alpha:&aa];
-
-    // Section header
-    UILabel *sectionHeader = [[UILabel alloc] init];
-    sectionHeader.translatesAutoresizingMaskIntoConstraints = NO;
-    sectionHeader.text = @"ACTIVE CONTAINER";
-    sectionHeader.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
-    sectionHeader.textColor = accent;
-    [_mainStack addArrangedSubview:sectionHeader];
-
-    // Card
-    UIView *card = [[UIView alloc] init];
-    card.translatesAutoresizingMaskIntoConstraints = NO;
-    card.backgroundColor = [UIColor colorWithRed:0.10 + ar * 0.07
-                                           green:0.10 + ag * 0.07
-                                            blue:0.14 + ab * 0.07
-                                           alpha:0.92];
-    card.layer.cornerRadius = 22;
-    card.layer.cornerCurve = kCACornerCurveContinuous;
-    card.layer.borderWidth = 1.0;
-    card.layer.borderColor = [accent colorWithAlphaComponent:0.35].CGColor;
-    card.layer.shadowColor = accent.CGColor;
-    card.layer.shadowOffset = CGSizeMake(0, 6);
-    card.layer.shadowRadius = 20;
-    card.layer.shadowOpacity = 0.22;
-    card.clipsToBounds = NO;
-    [_mainStack addArrangedSubview:card];
-
-    // Device image (left)
-    MiOSContainerConfig *c = container;
-    NSString *deviceName = (c.deviceSpoofEnabled && c.deviceName.length > 0) ? c.deviceName : @"iPhone 15 Pro";
-    UIImageView *deviceImageView = [[UIImageView alloc] init];
-    deviceImageView.translatesAutoresizingMaskIntoConstraints = NO;
-    deviceImageView.contentMode = UIViewContentModeScaleAspectFit;
-    deviceImageView.image = [MiOSDeviceImageRenderer renderDeviceForName:deviceName
-                                                                    size:CGSizeMake(90, 118)
-                                                             accentColor:accent];
-    if (!c.deviceSpoofEnabled) deviceImageView.alpha = 0.55;
-    [card addSubview:deviceImageView];
-
-    // Name + status row (right of device)
-    UILabel *nameLabel = [[UILabel alloc] init];
-    nameLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    nameLabel.text = container.name.length > 0 ? container.name : @"Container";
-    nameLabel.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold];
-    nameLabel.textColor = [MiOSTheme primaryText];
-    nameLabel.adjustsFontSizeToFitWidth = YES;
-    nameLabel.minimumScaleFactor = 0.7;
-    nameLabel.numberOfLines = 1;
-    [card addSubview:nameLabel];
-
-    // Status dot + label
-    UIView *statusDot = [[UIView alloc] init];
-    statusDot.translatesAutoresizingMaskIntoConstraints = NO;
-    statusDot.backgroundColor = enabled ? [MiOSTheme success] : [MiOSTheme tertiaryText];
-    statusDot.layer.cornerRadius = 4;
-    statusDot.layer.shadowColor = (enabled ? [MiOSTheme success] : [UIColor clearColor]).CGColor;
-    statusDot.layer.shadowOffset = CGSizeZero;
-    statusDot.layer.shadowRadius = 4;
-    statusDot.layer.shadowOpacity = 0.8;
-    [card addSubview:statusDot];
-
-    UILabel *statusLabel = [[UILabel alloc] init];
-    statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    statusLabel.text = enabled ? @"Active" : @"Disabled";
-    statusLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
-    statusLabel.textColor = [MiOSTheme secondaryText];
-    [card addSubview:statusLabel];
-
-    // Master toggle (global enable)
-    UISwitch *masterToggle = [[UISwitch alloc] init];
-    masterToggle.translatesAutoresizingMaskIntoConstraints = NO;
-    masterToggle.onTintColor = accent;
-    masterToggle.on = enabled;
-    [masterToggle addTarget:self action:@selector(masterToggleChanged:) forControlEvents:UIControlEventValueChanged];
-    [card addSubview:masterToggle];
-
-    // Info rows: iOS version, storage, GPS, device name
-    UIStackView *infoStack = [[UIStackView alloc] init];
-    infoStack.translatesAutoresizingMaskIntoConstraints = NO;
-    infoStack.axis = UILayoutConstraintAxisVertical;
-    infoStack.spacing = 6;
-
-    NSString *iosText = (c.deviceSpoofEnabled && c.iosVersion.length > 0)
-        ? [NSString stringWithFormat:@"iOS %@", c.iosVersion] : @"iOS default";
-    [infoStack addArrangedSubview:[self infoRowWithIcon:@"gear" text:iosText accent:accent]];
-
-    if (c.deviceSpoofEnabled && c.storageSizeGB > 0) {
-        [infoStack addArrangedSubview:[self infoRowWithIcon:@"internaldrive"
-                                                       text:[NSString stringWithFormat:@"%ld GB", (long)c.storageSizeGB]
-                                                     accent:accent]];
-    }
-
-    NSString *gpsText;
-    if (c.gpsEnabled) {
-        gpsText = c.locationName.length > 0 ? c.locationName
-            : [NSString stringWithFormat:@"%.3f, %.3f", c.latitude, c.longitude];
+        [_mainStack addArrangedSubview:[self buildHeroForContainer:active accent:accent]];
+        [_mainStack addArrangedSubview:[self buildTilesForContainer:active accent:accent]];
     } else {
-        gpsText = @"GPS off";
+        [_mainStack addArrangedSubview:[self buildEmptyHeroWithAccent:accent]];
     }
-    [infoStack addArrangedSubview:[self infoRowWithIcon:@"location.fill" text:gpsText accent:accent]];
 
-    [card addSubview:infoStack];
+    [_mainStack addArrangedSubview:[self buildNewContainerCardWithAccent:accent]];
 
-    // App icons row (all selected apps)
-    UIView *iconsRow = [self appIconsRowForBundleIDs:container.apps maxIcons:7 iconSize:30];
-    [card addSubview:iconsRow];
+    if (_containers.count > 0) {
+        UILabel *header = [[UILabel alloc] init];
+        header.text = @"Containers";
+        header.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
+        header.textColor = [MiOSTheme primaryText];
+        [_mainStack addArrangedSubview:header];
+        [_mainStack setCustomSpacing:12 afterView:header];
 
-    [NSLayoutConstraint activateConstraints:@[
-        [deviceImageView.topAnchor constraintEqualToAnchor:card.topAnchor constant:16],
-        [deviceImageView.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
-        [deviceImageView.widthAnchor constraintEqualToConstant:90],
-        [deviceImageView.heightAnchor constraintEqualToConstant:118],
-
-        [nameLabel.topAnchor constraintEqualToAnchor:card.topAnchor constant:18],
-        [nameLabel.leadingAnchor constraintEqualToAnchor:deviceImageView.trailingAnchor constant:14],
-        [nameLabel.trailingAnchor constraintLessThanOrEqualToAnchor:masterToggle.leadingAnchor constant:-8],
-
-        [masterToggle.topAnchor constraintEqualToAnchor:card.topAnchor constant:16],
-        [masterToggle.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
-
-        [statusDot.leadingAnchor constraintEqualToAnchor:nameLabel.leadingAnchor],
-        [statusDot.centerYAnchor constraintEqualToAnchor:statusLabel.centerYAnchor],
-        [statusDot.widthAnchor constraintEqualToConstant:8],
-        [statusDot.heightAnchor constraintEqualToConstant:8],
-        [statusLabel.topAnchor constraintEqualToAnchor:nameLabel.bottomAnchor constant:6],
-        [statusLabel.leadingAnchor constraintEqualToAnchor:statusDot.trailingAnchor constant:6],
-
-        [infoStack.topAnchor constraintEqualToAnchor:statusLabel.bottomAnchor constant:12],
-        [infoStack.leadingAnchor constraintEqualToAnchor:nameLabel.leadingAnchor],
-        [infoStack.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
-
-        [iconsRow.topAnchor constraintGreaterThanOrEqualToAnchor:infoStack.bottomAnchor constant:14],
-        [iconsRow.topAnchor constraintGreaterThanOrEqualToAnchor:deviceImageView.bottomAnchor constant:14],
-        [iconsRow.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
-        [iconsRow.trailingAnchor constraintLessThanOrEqualToAnchor:card.trailingAnchor constant:-16],
-        [iconsRow.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-16],
-        [iconsRow.heightAnchor constraintEqualToConstant:30],
-    ]];
-
-    // Tap to edit
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(activeCardTapped:)];
-    card.userInteractionEnabled = YES;
-    objc_setAssociatedObject(card, "containerID", container.identifier, OBJC_ASSOCIATION_COPY_NONATOMIC);
-    [card addGestureRecognizer:tap];
+        __weak typeof(self) weakSelf = self;
+        MiOSContainerGridView *grid = [[MiOSContainerGridView alloc]
+            initWithContainers:_containers
+                      activeID:active.identifier
+                         onTap:^(MiOSContainerConfig *container) {
+            [weakSelf presentEditorForContainer:container];
+        }];
+        [_mainStack addArrangedSubview:grid];
+    }
 }
 
-- (UIView *)infoRowWithIcon:(NSString *)iconName text:(NSString *)text accent:(UIColor *)accent {
+#pragma mark - Header
+
+- (UIView *)buildHeaderWithAccent:(UIColor *)accent {
     UIView *row = [[UIView alloc] init];
     row.translatesAutoresizingMaskIntoConstraints = NO;
 
-    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:11 weight:UIImageSymbolWeightSemibold];
-    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:iconName withConfiguration:cfg]];
-    icon.translatesAutoresizingMaskIntoConstraints = NO;
-    icon.tintColor = accent;
-    icon.contentMode = UIViewContentModeScaleAspectFit;
-    [row addSubview:icon];
+    UILabel *logo = [[UILabel alloc] init];
+    logo.translatesAutoresizingMaskIntoConstraints = NO;
+    logo.text = @"miOS";
+    logo.font = [UIFont systemFontOfSize:24 weight:UIFontWeightHeavy];
+    logo.textColor = [MiOSTheme primaryText];
+    [row addSubview:logo];
 
-    UILabel *label = [[UILabel alloc] init];
-    label.translatesAutoresizingMaskIntoConstraints = NO;
-    label.text = text;
-    label.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
-    label.textColor = [MiOSTheme secondaryText];
-    label.lineBreakMode = NSLineBreakByTruncatingTail;
-    [row addSubview:label];
+    UILabel *version = [[UILabel alloc] init];
+    version.translatesAutoresizingMaskIntoConstraints = NO;
+    version.text = @"v1.0.0";
+    version.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightMedium];
+    version.textColor = [MiOSTheme tertiaryText];
+    [row addSubview:version];
+
+    // Notification bell — decorative for now.
+    UIView *bell = [[UIView alloc] init];
+    bell.translatesAutoresizingMaskIntoConstraints = NO;
+    bell.userInteractionEnabled = NO;
+    bell.backgroundColor = [UIColor colorWithRed:0.16 green:0.17 blue:0.24 alpha:0.92];
+    bell.layer.cornerRadius = 21;
+    bell.layer.borderWidth = 1.0;
+    bell.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.10].CGColor;
+    [row addSubview:bell];
+
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold];
+    UIImageView *bellIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"bell.fill" withConfiguration:cfg]];
+    bellIcon.translatesAutoresizingMaskIntoConstraints = NO;
+    bellIcon.tintColor = [UIColor colorWithWhite:1.0 alpha:0.85];
+    [bell addSubview:bellIcon];
+
+    UIView *badge = [[UIView alloc] init];
+    badge.translatesAutoresizingMaskIntoConstraints = NO;
+    badge.backgroundColor = accent;
+    badge.layer.cornerRadius = 5;
+    badge.layer.borderWidth = 2;
+    badge.layer.borderColor = [UIColor colorWithRed:0.11 green:0.12 blue:0.19 alpha:1.0].CGColor;
+    [bell addSubview:badge];
 
     [NSLayoutConstraint activateConstraints:@[
-        [icon.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
-        [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        [icon.widthAnchor constraintEqualToConstant:16],
-        [label.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:8],
-        [label.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
-        [label.topAnchor constraintEqualToAnchor:row.topAnchor],
-        [label.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
+        [row.heightAnchor constraintEqualToConstant:44],
+        [logo.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:4],
+        [logo.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [version.leadingAnchor constraintEqualToAnchor:logo.trailingAnchor constant:8],
+        [version.lastBaselineAnchor constraintEqualToAnchor:logo.lastBaselineAnchor],
+        [bell.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+        [bell.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [bell.widthAnchor constraintEqualToConstant:42],
+        [bell.heightAnchor constraintEqualToConstant:42],
+        [bellIcon.centerXAnchor constraintEqualToAnchor:bell.centerXAnchor],
+        [bellIcon.centerYAnchor constraintEqualToAnchor:bell.centerYAnchor],
+        [badge.topAnchor constraintEqualToAnchor:bell.topAnchor constant:7],
+        [badge.trailingAnchor constraintEqualToAnchor:bell.trailingAnchor constant:-8],
+        [badge.widthAnchor constraintEqualToConstant:10],
+        [badge.heightAnchor constraintEqualToConstant:10],
     ]];
     return row;
 }
 
-- (UIView *)appIconsRowForBundleIDs:(NSArray<NSString *> *)bundleIDs maxIcons:(NSInteger)maxIcons iconSize:(CGFloat)iconSize {
-    UIView *container = [[UIView alloc] init];
-    container.translatesAutoresizingMaskIntoConstraints = NO;
+#pragma mark - Hero
 
-    CGFloat x = 0;
-    CGFloat overlap = iconSize * 0.28;
-    NSInteger shown = MIN((NSInteger)bundleIDs.count, maxIcons);
+- (UIView *)haloWithContent:(UIView *)content accent:(UIColor *)accent inHero:(UIView *)hero {
+    // Soft radial bloom behind the device.
+    MiOSGradientView *glow = [[MiOSGradientView alloc] init];
+    glow.translatesAutoresizingMaskIntoConstraints = NO;
+    glow.userInteractionEnabled = NO;
+    glow.gradientLayer.type = kCAGradientLayerRadial;
+    [glow setColors:@[[accent colorWithAlphaComponent:0.38],
+                      [accent colorWithAlphaComponent:0.12],
+                      [accent colorWithAlphaComponent:0.0]]
+              start:CGPointMake(0.5, 0.5) end:CGPointMake(1.0, 1.0)];
+    glow.gradientLayer.locations = @[@0.0, @0.45, @1.0];
+    [hero addSubview:glow];
 
-    for (NSInteger i = 0; i < shown; i++) {
-        UIImageView *iv = [[UIImageView alloc] init];
-        iv.translatesAutoresizingMaskIntoConstraints = NO;
-        iv.contentMode = UIViewContentModeScaleAspectFill;
-        iv.clipsToBounds = YES;
-        iv.layer.cornerRadius = iconSize * 0.22;
-        iv.layer.cornerCurve = kCACornerCurveContinuous;
-        iv.layer.borderColor = [UIColor colorWithWhite:0.0 alpha:0.4].CGColor;
-        iv.layer.borderWidth = 1.5;
+    // Dashed orbit ring, like the ornament around the avatar in the reference.
+    UIView *orbit = [[UIView alloc] init];
+    orbit.translatesAutoresizingMaskIntoConstraints = NO;
+    orbit.userInteractionEnabled = NO;
+    CAShapeLayer *ring = [CAShapeLayer layer];
+    ring.path = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(0, 0, 204, 204)].CGPath;
+    ring.fillColor = [UIColor clearColor].CGColor;
+    ring.strokeColor = [UIColor colorWithWhite:1.0 alpha:0.14].CGColor;
+    ring.lineWidth = 1.0;
+    ring.lineDashPattern = @[@2, @6];
+    [orbit.layer addSublayer:ring];
+    [hero addSubview:orbit];
 
-        UIImage *icon = [self iconForBundleID:bundleIDs[i]];
-        if (icon) {
-            iv.image = icon;
-        } else {
-            iv.image = [UIImage systemImageNamed:@"app.fill"];
-            iv.tintColor = [MiOSTheme tertiaryText];
-            iv.contentMode = UIViewContentModeCenter;
-            iv.backgroundColor = [UIColor colorWithWhite:0.15 alpha:1.0];
-        }
+    UIView *halo = [[UIView alloc] init];
+    halo.translatesAutoresizingMaskIntoConstraints = NO;
+    halo.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.04];
+    halo.layer.cornerRadius = 82;
+    halo.layer.borderWidth = 1.5;
+    halo.layer.borderColor = [accent colorWithAlphaComponent:0.55].CGColor;
+    halo.layer.shadowColor = accent.CGColor;
+    halo.layer.shadowOffset = CGSizeZero;
+    halo.layer.shadowRadius = 18;
+    halo.layer.shadowOpacity = 0.45;
+    [hero addSubview:halo];
 
-        [container addSubview:iv];
-        [NSLayoutConstraint activateConstraints:@[
-            [iv.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:x],
-            [iv.centerYAnchor constraintEqualToAnchor:container.centerYAnchor],
-            [iv.widthAnchor constraintEqualToConstant:iconSize],
-            [iv.heightAnchor constraintEqualToConstant:iconSize],
-        ]];
-        x += iconSize - overlap;
-    }
-
-    // "+N" overflow badge
-    if ((NSInteger)bundleIDs.count > maxIcons) {
-        UILabel *more = [[UILabel alloc] init];
-        more.translatesAutoresizingMaskIntoConstraints = NO;
-        more.text = [NSString stringWithFormat:@"+%ld", (long)(bundleIDs.count - maxIcons)];
-        more.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
-        more.textColor = [MiOSTheme secondaryText];
-        [container addSubview:more];
-        [NSLayoutConstraint activateConstraints:@[
-            [more.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:x + overlap + 4],
-            [more.centerYAnchor constraintEqualToAnchor:container.centerYAnchor],
-        ]];
-    }
-
-    if (shown == 0) {
-        UILabel *none = [[UILabel alloc] init];
-        none.translatesAutoresizingMaskIntoConstraints = NO;
-        none.text = @"No apps";
-        none.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        none.textColor = [MiOSTheme tertiaryText];
-        [container addSubview:none];
-        [NSLayoutConstraint activateConstraints:@[
-            [none.leadingAnchor constraintEqualToAnchor:container.leadingAnchor],
-            [none.centerYAnchor constraintEqualToAnchor:container.centerYAnchor],
-        ]];
-    }
-
-    return container;
-}
-
-- (void)masterToggleChanged:(UISwitch *)sender {
-    _corePrefs[@"enabled"] = @(sender.on);
-    [self savePreferences];
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-    [haptic impactOccurred];
-    [self rebuildContent];
-}
-
-- (void)activeCardTapped:(UITapGestureRecognizer *)sender {
-    UIView *card = sender.view;
-    [UIView animateWithDuration:0.08 animations:^{
-        card.transform = CGAffineTransformMakeScale(0.98, 0.98);
-    } completion:^(BOOL finished) {
-        [UIView animateWithDuration:0.2 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:0 animations:^{
-            card.transform = CGAffineTransformIdentity;
-        } completion:nil];
-    }];
-    NSString *containerID = objc_getAssociatedObject(card, "containerID");
-    [self editContainerWithID:containerID];
-}
-
-#pragma mark - Empty State
-
-- (void)buildEmptyState {
-    UIView *emptyCard = [[UIView alloc] init];
-    emptyCard.translatesAutoresizingMaskIntoConstraints = NO;
-    emptyCard.backgroundColor = [MiOSTheme accentTintedCardBackground];
-    emptyCard.layer.cornerRadius = 20;
-    emptyCard.layer.cornerCurve = kCACornerCurveContinuous;
-    emptyCard.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
-    emptyCard.layer.borderWidth = 1.0;
-
-    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:48 weight:UIImageSymbolWeightThin];
-    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"square.stack.3d.up.slash" withConfiguration:cfg]];
-    icon.translatesAutoresizingMaskIntoConstraints = NO;
-    icon.tintColor = [MiOSTheme tertiaryText];
-    [emptyCard addSubview:icon];
-
-    UILabel *titleLabel = [[UILabel alloc] init];
-    titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    titleLabel.text = @"No Containers Yet";
-    titleLabel.font = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
-    titleLabel.textColor = [MiOSTheme primaryText];
-    titleLabel.textAlignment = NSTextAlignmentCenter;
-    [emptyCard addSubview:titleLabel];
-
-    UILabel *subtitleLabel = [[UILabel alloc] init];
-    subtitleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    subtitleLabel.text = @"Create a container to isolate app data,\nspoof GPS, device info, and identifiers.";
-    subtitleLabel.font = [UIFont systemFontOfSize:14];
-    subtitleLabel.textColor = [MiOSTheme secondaryText];
-    subtitleLabel.textAlignment = NSTextAlignmentCenter;
-    subtitleLabel.numberOfLines = 0;
-    [emptyCard addSubview:subtitleLabel];
+    content.translatesAutoresizingMaskIntoConstraints = NO;
+    [halo addSubview:content];
 
     [NSLayoutConstraint activateConstraints:@[
-        [emptyCard.heightAnchor constraintEqualToConstant:200],
-        [icon.centerXAnchor constraintEqualToAnchor:emptyCard.centerXAnchor],
-        [icon.topAnchor constraintEqualToAnchor:emptyCard.topAnchor constant:32],
-        [titleLabel.centerXAnchor constraintEqualToAnchor:emptyCard.centerXAnchor],
-        [titleLabel.topAnchor constraintEqualToAnchor:icon.bottomAnchor constant:16],
-        [subtitleLabel.centerXAnchor constraintEqualToAnchor:emptyCard.centerXAnchor],
-        [subtitleLabel.topAnchor constraintEqualToAnchor:titleLabel.bottomAnchor constant:8],
-        [subtitleLabel.leadingAnchor constraintEqualToAnchor:emptyCard.leadingAnchor constant:24],
-        [subtitleLabel.trailingAnchor constraintEqualToAnchor:emptyCard.trailingAnchor constant:-24],
+        [halo.topAnchor constraintEqualToAnchor:hero.topAnchor constant:24],
+        [halo.centerXAnchor constraintEqualToAnchor:hero.centerXAnchor],
+        [halo.widthAnchor constraintEqualToConstant:164],
+        [halo.heightAnchor constraintEqualToConstant:164],
+        [orbit.centerXAnchor constraintEqualToAnchor:halo.centerXAnchor],
+        [orbit.centerYAnchor constraintEqualToAnchor:halo.centerYAnchor],
+        [orbit.widthAnchor constraintEqualToConstant:204],
+        [orbit.heightAnchor constraintEqualToConstant:204],
+        [glow.centerXAnchor constraintEqualToAnchor:halo.centerXAnchor],
+        [glow.centerYAnchor constraintEqualToAnchor:halo.centerYAnchor],
+        [glow.widthAnchor constraintEqualToConstant:320],
+        [glow.heightAnchor constraintEqualToConstant:320],
+        [content.centerXAnchor constraintEqualToAnchor:halo.centerXAnchor],
+        [content.centerYAnchor constraintEqualToAnchor:halo.centerYAnchor],
     ]];
-
-    [_mainStack addArrangedSubview:emptyCard];
+    return halo;
 }
 
-#pragma mark - Container Grid
+- (UIView *)buildHeroForContainer:(MiOSContainerConfig *)c accent:(UIColor *)accent {
+    UIView *hero = [[UIView alloc] init];
+    hero.translatesAutoresizingMaskIntoConstraints = NO;
+    hero.layer.zPosition = -1; // keep the glow behind the header row
 
-- (void)buildContainerGrid {
-    UILabel *sectionHeader = [[UILabel alloc] init];
-    sectionHeader.translatesAutoresizingMaskIntoConstraints = NO;
-    sectionHeader.text = @"ALL CONTAINERS";
-    sectionHeader.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
-    sectionHeader.textColor = [MiOSTheme accentColor];
-    [_mainStack addArrangedSubview:sectionHeader];
+    NSString *deviceName = (c.deviceSpoofEnabled && c.deviceName.length > 0) ? c.deviceName : @"iPhone 15 Pro";
+    UIImageView *device = [[UIImageView alloc] init];
+    device.contentMode = UIViewContentModeScaleAspectFit;
+    device.image = [MiOSDeviceImageRenderer renderDeviceForName:deviceName size:CGSizeMake(92, 120) accentColor:accent];
+    UIView *halo = [self haloWithContent:device accent:accent inHero:hero];
 
-    for (NSInteger i = 0; i < (NSInteger)_containers.count; i += 2) {
-        UIView *rowView = [[UIView alloc] init];
-        rowView.translatesAutoresizingMaskIntoConstraints = NO;
+    UILabel *name = [[UILabel alloc] init];
+    name.translatesAutoresizingMaskIntoConstraints = NO;
+    name.text = c.name.length > 0 ? c.name : @"Container";
+    name.font = [UIFont systemFontOfSize:30 weight:UIFontWeightBold];
+    name.textColor = [MiOSTheme primaryText];
+    name.textAlignment = NSTextAlignmentCenter;
+    name.adjustsFontSizeToFitWidth = YES;
+    name.minimumScaleFactor = 0.6;
+    [hero addSubview:name];
 
-        UIView *leftCard = [self buildGridCardForContainer:_containers[i]];
-        [rowView addSubview:leftCard];
-
-        [NSLayoutConstraint activateConstraints:@[
-            [leftCard.topAnchor constraintEqualToAnchor:rowView.topAnchor],
-            [leftCard.leadingAnchor constraintEqualToAnchor:rowView.leadingAnchor],
-            [leftCard.bottomAnchor constraintLessThanOrEqualToAnchor:rowView.bottomAnchor],
-        ]];
-
-        if (i + 1 < (NSInteger)_containers.count) {
-            UIView *rightCard = [self buildGridCardForContainer:_containers[i + 1]];
-            [rowView addSubview:rightCard];
-
-            [NSLayoutConstraint activateConstraints:@[
-                [rightCard.topAnchor constraintEqualToAnchor:rowView.topAnchor],
-                [rightCard.trailingAnchor constraintEqualToAnchor:rowView.trailingAnchor],
-                [rightCard.bottomAnchor constraintLessThanOrEqualToAnchor:rowView.bottomAnchor],
-                [leftCard.widthAnchor constraintEqualToAnchor:rightCard.widthAnchor],
-                [leftCard.trailingAnchor constraintEqualToAnchor:rightCard.leadingAnchor constant:-12],
-            ]];
-        } else {
-            [NSLayoutConstraint activateConstraints:@[
-                [leftCard.widthAnchor constraintEqualToAnchor:rowView.widthAnchor multiplier:0.5 constant:-6],
-            ]];
-        }
-
-        [_mainStack addArrangedSubview:rowView];
-    }
-}
-
-- (UIView *)buildGridCardForContainer:(MiOSContainerConfig *)container {
-    BOOL isActive = [container.identifier isEqualToString:_activeContainerID];
-
-    UIColor *cardAccent = [self accentForContainer:container];
-    CGFloat cr, cg, cb, ca;
-    [cardAccent getRed:&cr green:&cg blue:&cb alpha:&ca];
-
-    UIView *card = [[UIView alloc] init];
-    card.translatesAutoresizingMaskIntoConstraints = NO;
-    card.backgroundColor = [UIColor colorWithRed:0.10 + cr * 0.06
-                                           green:0.10 + cg * 0.06
-                                            blue:0.14 + cb * 0.06
-                                           alpha:0.90];
-    card.layer.cornerRadius = 16;
-    card.layer.cornerCurve = kCACornerCurveContinuous;
-    card.layer.borderWidth = isActive ? 1.5 : 0.5;
-    card.layer.borderColor = isActive
-        ? [cardAccent colorWithAlphaComponent:0.35].CGColor
-        : [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
-
-    card.layer.shadowColor = cardAccent.CGColor;
-    card.layer.shadowOffset = CGSizeMake(0, 2);
-    card.layer.shadowRadius = isActive ? 12 : 6;
-    card.layer.shadowOpacity = isActive ? 0.20 : 0.08;
-    card.clipsToBounds = NO;
-
-    UIImageView *appIconView = [[UIImageView alloc] init];
-    appIconView.translatesAutoresizingMaskIntoConstraints = NO;
-    appIconView.contentMode = UIViewContentModeScaleAspectFill;
-    appIconView.clipsToBounds = YES;
-    appIconView.layer.cornerRadius = 12;
-    appIconView.layer.cornerCurve = kCACornerCurveContinuous;
-
-    if (container.apps.count > 0) {
-        UIImage *icon = [self iconForBundleID:container.apps.firstObject];
-        if (icon) {
-            appIconView.image = icon;
-        } else {
-            appIconView.image = [UIImage systemImageNamed:@"app.fill"];
-            appIconView.tintColor = [MiOSTheme tertiaryText];
-            appIconView.contentMode = UIViewContentModeCenter;
-            appIconView.backgroundColor = [UIColor colorWithWhite:0.15 alpha:1.0];
-        }
+    NSString *subtitle;
+    if (c.deviceSpoofEnabled && c.deviceName.length > 0) {
+        subtitle = c.iosVersion.length > 0
+            ? [NSString stringWithFormat:@"%@  ·  iOS %@", c.deviceName, c.iosVersion]
+            : c.deviceName;
     } else {
-        UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightRegular];
-        appIconView.image = [UIImage systemImageNamed:@"square.stack.3d.up.fill" withConfiguration:cfg];
-        appIconView.tintColor = cardAccent;
-        appIconView.contentMode = UIViewContentModeCenter;
-        appIconView.backgroundColor = [cardAccent colorWithAlphaComponent:0.10];
+        subtitle = @"Real device";
     }
+    UILabel *sub = [[UILabel alloc] init];
+    sub.translatesAutoresizingMaskIntoConstraints = NO;
+    sub.text = subtitle;
+    sub.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+    sub.textColor = [MiOSTheme secondaryText];
+    sub.textAlignment = NSTextAlignmentCenter;
+    [hero addSubview:sub];
 
-    appIconView.layer.shadowColor = cardAccent.CGColor;
-    appIconView.layer.shadowOffset = CGSizeZero;
-    appIconView.layer.shadowRadius = 6;
-    appIconView.layer.shadowOpacity = 0.25;
-    [card addSubview:appIconView];
+    UIView *pill = [self statusPill];
+    [hero addSubview:pill];
 
-    UIView *activeDot = nil;
-    if (isActive) {
-        activeDot = [[UIView alloc] init];
-        activeDot.translatesAutoresizingMaskIntoConstraints = NO;
-        activeDot.backgroundColor = cardAccent;
-        activeDot.layer.cornerRadius = 4;
-        activeDot.layer.shadowColor = cardAccent.CGColor;
-        activeDot.layer.shadowOffset = CGSizeZero;
-        activeDot.layer.shadowRadius = 4;
-        activeDot.layer.shadowOpacity = 0.6;
-        [card addSubview:activeDot];
-    }
-
-    UILabel *nameLabel = [[UILabel alloc] init];
-    nameLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    nameLabel.text = container.name.length > 0 ? container.name : @"Container";
-    nameLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
-    nameLabel.textColor = [MiOSTheme primaryText];
-    nameLabel.numberOfLines = 1;
-    [card addSubview:nameLabel];
-
-    UILabel *subtitleLabel = [[UILabel alloc] init];
-    subtitleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    subtitleLabel.text = [NSString stringWithFormat:@"%lu app%@",
-        (unsigned long)container.apps.count, container.apps.count == 1 ? @"" : @"s"];
-    subtitleLabel.font = [UIFont systemFontOfSize:11];
-    subtitleLabel.textColor = [MiOSTheme secondaryText];
-    [card addSubview:subtitleLabel];
-
-    UIStackView *dotsStack = [[UIStackView alloc] init];
-    dotsStack.translatesAutoresizingMaskIntoConstraints = NO;
-    dotsStack.axis = UILayoutConstraintAxisHorizontal;
-    dotsStack.spacing = 4;
-
-    if (container.gpsEnabled) [dotsStack addArrangedSubview:[self featureDotWithColor:cardAccent]];
-    if (container.deviceSpoofEnabled) [dotsStack addArrangedSubview:[self featureDotWithColor:cardAccent]];
-    if (container.spoofVendorID || container.spoofAdvertisingID) [dotsStack addArrangedSubview:[self featureDotWithColor:cardAccent]];
-    [card addSubview:dotsStack];
-
-    NSMutableArray *constraints = [NSMutableArray arrayWithArray:@[
-        [appIconView.topAnchor constraintEqualToAnchor:card.topAnchor constant:12],
-        [appIconView.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:12],
-        [appIconView.widthAnchor constraintEqualToConstant:44],
-        [appIconView.heightAnchor constraintEqualToConstant:44],
-        [nameLabel.topAnchor constraintEqualToAnchor:appIconView.bottomAnchor constant:10],
-        [nameLabel.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:12],
-        [nameLabel.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-12],
-        [subtitleLabel.topAnchor constraintEqualToAnchor:nameLabel.bottomAnchor constant:2],
-        [subtitleLabel.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:12],
-        [subtitleLabel.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-12],
-        [dotsStack.topAnchor constraintEqualToAnchor:subtitleLabel.bottomAnchor constant:8],
-        [dotsStack.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:12],
-        [dotsStack.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-12],
+    [NSLayoutConstraint activateConstraints:@[
+        [name.topAnchor constraintEqualToAnchor:halo.bottomAnchor constant:26],
+        [name.leadingAnchor constraintEqualToAnchor:hero.leadingAnchor constant:16],
+        [name.trailingAnchor constraintEqualToAnchor:hero.trailingAnchor constant:-16],
+        [sub.topAnchor constraintEqualToAnchor:name.bottomAnchor constant:4],
+        [sub.leadingAnchor constraintEqualToAnchor:hero.leadingAnchor constant:16],
+        [sub.trailingAnchor constraintEqualToAnchor:hero.trailingAnchor constant:-16],
+        [pill.topAnchor constraintEqualToAnchor:sub.bottomAnchor constant:14],
+        [pill.centerXAnchor constraintEqualToAnchor:hero.centerXAnchor],
+        [pill.bottomAnchor constraintEqualToAnchor:hero.bottomAnchor],
     ]];
 
-    if (activeDot) {
-        [constraints addObjectsFromArray:@[
-            [activeDot.topAnchor constraintEqualToAnchor:card.topAnchor constant:12],
-            [activeDot.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-12],
-            [activeDot.widthAnchor constraintEqualToConstant:8],
-            [activeDot.heightAnchor constraintEqualToConstant:8],
-        ]];
-    }
-
-    [NSLayoutConstraint activateConstraints:constraints];
-
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(gridCardTapped:)];
-    card.userInteractionEnabled = YES;
-    objc_setAssociatedObject(card, "containerID", container.identifier, OBJC_ASSOCIATION_COPY_NONATOMIC);
-    [card addGestureRecognizer:tap];
-
-    return card;
+    halo.userInteractionEnabled = YES;
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(activeContainerTapped)];
+    [halo addGestureRecognizer:tap];
+    return hero;
 }
 
-- (UIView *)featureDotWithColor:(UIColor *)color {
+- (UIView *)statusPill {
+    BOOL enabled = [_corePrefs[@"enabled"] boolValue];
+    UIColor *stateColor = enabled ? [MiOSTheme success] : [MiOSTheme tertiaryText];
+
+    UIView *pill = [[UIView alloc] init];
+    pill.translatesAutoresizingMaskIntoConstraints = NO;
+    pill.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.06];
+    pill.layer.cornerRadius = 16;
+    pill.layer.borderWidth = 1.0;
+    pill.layer.borderColor = [stateColor colorWithAlphaComponent:0.35].CGColor;
+
     UIView *dot = [[UIView alloc] init];
     dot.translatesAutoresizingMaskIntoConstraints = NO;
-    dot.backgroundColor = [color colorWithAlphaComponent:0.5];
-    dot.layer.cornerRadius = 3;
-    [NSLayoutConstraint activateConstraints:@[
-        [dot.widthAnchor constraintEqualToConstant:6],
-        [dot.heightAnchor constraintEqualToConstant:6],
-    ]];
-    return dot;
-}
-
-- (void)gridCardTapped:(UITapGestureRecognizer *)sender {
-    UIView *card = sender.view;
-    [UIView animateWithDuration:0.08 animations:^{
-        card.transform = CGAffineTransformMakeScale(0.96, 0.96);
-        card.alpha = 0.7;
-    } completion:^(BOOL finished) {
-        [UIView animateWithDuration:0.2 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:0 animations:^{
-            card.transform = CGAffineTransformIdentity;
-            card.alpha = 1.0;
-        } completion:nil];
-    }];
-
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [haptic impactOccurred];
-
-    NSString *containerID = objc_getAssociatedObject(card, "containerID");
-    [self editContainerWithID:containerID];
-}
-
-#pragma mark - New Container Button
-
-- (void)buildNewContainerButton {
-    UIView *btn = [[UIView alloc] init];
-    btn.translatesAutoresizingMaskIntoConstraints = NO;
-    btn.layer.cornerRadius = 16;
-    btn.layer.cornerCurve = kCACornerCurveContinuous;
-
-    // Textured glass look: accent-tinted fill + accent border + subtle glow
-    UIColor *accent = [MiOSTheme accentColor];
-    CGFloat ar, ag, ab, aa;
-    [accent getRed:&ar green:&ag blue:&ab alpha:&aa];
-    btn.backgroundColor = [UIColor colorWithRed:0.10 + ar * 0.10
-                                          green:0.10 + ag * 0.10
-                                           blue:0.14 + ab * 0.10
-                                          alpha:0.92];
-    btn.layer.borderWidth = 1.0;
-    btn.layer.borderColor = [accent colorWithAlphaComponent:0.45].CGColor;
-    btn.layer.shadowColor = accent.CGColor;
-    btn.layer.shadowOffset = CGSizeMake(0, 3);
-    btn.layer.shadowRadius = 12;
-    btn.layer.shadowOpacity = 0.20;
-
-    // Inner top sheen for texture
-    CAGradientLayer *sheen = [CAGradientLayer layer];
-    sheen.colors = @[
-        (id)[UIColor colorWithWhite:1.0 alpha:0.10].CGColor,
-        (id)[UIColor colorWithWhite:1.0 alpha:0.0].CGColor,
-    ];
-    sheen.startPoint = CGPointMake(0.5, 0.0);
-    sheen.endPoint = CGPointMake(0.5, 1.0);
-    sheen.cornerRadius = 16;
-    sheen.masksToBounds = YES;
-    [btn.layer insertSublayer:sheen atIndex:0];
-    objc_setAssociatedObject(btn, "sheen", sheen, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-    UIView *iconBadge = [[UIView alloc] init];
-    iconBadge.translatesAutoresizingMaskIntoConstraints = NO;
-    iconBadge.backgroundColor = [accent colorWithAlphaComponent:0.20];
-    iconBadge.layer.cornerRadius = 14;
-    [btn addSubview:iconBadge];
-
-    UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold];
-    UIImageView *plusIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"plus" withConfiguration:config]];
-    plusIcon.translatesAutoresizingMaskIntoConstraints = NO;
-    plusIcon.tintColor = accent;
-    [iconBadge addSubview:plusIcon];
+    dot.backgroundColor = stateColor;
+    dot.layer.cornerRadius = 4;
+    dot.layer.shadowColor = stateColor.CGColor;
+    dot.layer.shadowOffset = CGSizeZero;
+    dot.layer.shadowRadius = 4;
+    dot.layer.shadowOpacity = enabled ? 0.9 : 0.0;
+    [pill addSubview:dot];
 
     UILabel *label = [[UILabel alloc] init];
     label.translatesAutoresizingMaskIntoConstraints = NO;
-    label.text = @"New Container";
-    label.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
+    label.text = enabled ? @"Active" : @"Paused";
+    label.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
     label.textColor = [MiOSTheme primaryText];
-    [btn addSubview:label];
+    [pill addSubview:label];
+
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:11 weight:UIImageSymbolWeightBold];
+    UIImageView *power = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"power" withConfiguration:cfg]];
+    power.translatesAutoresizingMaskIntoConstraints = NO;
+    power.tintColor = [MiOSTheme secondaryText];
+    [pill addSubview:power];
 
     [NSLayoutConstraint activateConstraints:@[
-        [btn.heightAnchor constraintEqualToConstant:56],
-        [iconBadge.leadingAnchor constraintEqualToAnchor:btn.leadingAnchor constant:14],
-        [iconBadge.centerYAnchor constraintEqualToAnchor:btn.centerYAnchor],
-        [iconBadge.widthAnchor constraintEqualToConstant:28],
-        [iconBadge.heightAnchor constraintEqualToConstant:28],
-        [plusIcon.centerXAnchor constraintEqualToAnchor:iconBadge.centerXAnchor],
-        [plusIcon.centerYAnchor constraintEqualToAnchor:iconBadge.centerYAnchor],
-        [label.leadingAnchor constraintEqualToAnchor:iconBadge.trailingAnchor constant:12],
-        [label.centerYAnchor constraintEqualToAnchor:btn.centerYAnchor],
+        [pill.heightAnchor constraintEqualToConstant:32],
+        [dot.leadingAnchor constraintEqualToAnchor:pill.leadingAnchor constant:14],
+        [dot.centerYAnchor constraintEqualToAnchor:pill.centerYAnchor],
+        [dot.widthAnchor constraintEqualToConstant:8],
+        [dot.heightAnchor constraintEqualToConstant:8],
+        [label.leadingAnchor constraintEqualToAnchor:dot.trailingAnchor constant:8],
+        [label.centerYAnchor constraintEqualToAnchor:pill.centerYAnchor],
+        [power.leadingAnchor constraintEqualToAnchor:label.trailingAnchor constant:10],
+        [power.centerYAnchor constraintEqualToAnchor:pill.centerYAnchor],
+        [power.trailingAnchor constraintEqualToAnchor:pill.trailingAnchor constant:-14],
     ]];
 
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(newContainerTapped:)];
-    [btn addGestureRecognizer:tap];
-    btn.userInteractionEnabled = YES;
+    [pill addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(statusPillTapped)]];
+    return pill;
+}
 
-    [_mainStack addArrangedSubview:btn];
+- (UIView *)buildEmptyHeroWithAccent:(UIColor *)accent {
+    UIView *hero = [[UIView alloc] init];
+    hero.translatesAutoresizingMaskIntoConstraints = NO;
+    hero.layer.zPosition = -1;
 
-    dispatch_async(dispatch_get_main_queue(), ^{
-        sheen.frame = btn.bounds;
-    });
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:52 weight:UIImageSymbolWeightThin];
+    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"square.stack.3d.up" withConfiguration:cfg]];
+    icon.tintColor = accent;
+    UIView *halo = [self haloWithContent:icon accent:accent inHero:hero];
+
+    UILabel *title = [[UILabel alloc] init];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.text = @"No Containers Yet";
+    title.font = [UIFont systemFontOfSize:26 weight:UIFontWeightBold];
+    title.textColor = [MiOSTheme primaryText];
+    title.textAlignment = NSTextAlignmentCenter;
+    [hero addSubview:title];
+
+    UILabel *sub = [[UILabel alloc] init];
+    sub.translatesAutoresizingMaskIntoConstraints = NO;
+    sub.text = @"Create a container to isolate apps\nand spoof GPS, device and identifiers.";
+    sub.numberOfLines = 0;
+    sub.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+    sub.textColor = [MiOSTheme secondaryText];
+    sub.textAlignment = NSTextAlignmentCenter;
+    [hero addSubview:sub];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [title.topAnchor constraintEqualToAnchor:halo.bottomAnchor constant:26],
+        [title.centerXAnchor constraintEqualToAnchor:hero.centerXAnchor],
+        [sub.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:6],
+        [sub.leadingAnchor constraintEqualToAnchor:hero.leadingAnchor constant:16],
+        [sub.trailingAnchor constraintEqualToAnchor:hero.trailingAnchor constant:-16],
+        [sub.bottomAnchor constraintEqualToAnchor:hero.bottomAnchor],
+    ]];
+    return hero;
+}
+
+#pragma mark - Tiles
+
+- (UIView *)buildTilesForContainer:(MiOSContainerConfig *)c accent:(UIColor *)accent {
+    UIView *row = [[UIView alloc] init];
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+
+    UIView *location = [self locationTileForContainer:c accent:accent];
+    UIView *apps = [self appsTileForContainer:c accent:accent];
+    UIView *privacy = [self privacyTileForContainer:c accent:accent];
+    [row addSubview:location];
+    [row addSubview:apps];
+    [row addSubview:privacy];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [row.heightAnchor constraintEqualToConstant:184],
+        [location.topAnchor constraintEqualToAnchor:row.topAnchor],
+        [location.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+        [location.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
+        [location.trailingAnchor constraintEqualToAnchor:apps.leadingAnchor constant:-12],
+        [location.widthAnchor constraintEqualToAnchor:apps.widthAnchor],
+
+        [apps.topAnchor constraintEqualToAnchor:row.topAnchor],
+        [apps.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+        [apps.heightAnchor constraintEqualToConstant:72],
+
+        [privacy.topAnchor constraintEqualToAnchor:apps.bottomAnchor constant:12],
+        [privacy.leadingAnchor constraintEqualToAnchor:apps.leadingAnchor],
+        [privacy.trailingAnchor constraintEqualToAnchor:apps.trailingAnchor],
+        [privacy.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
+    ]];
+
+    for (UIView *tile in @[location, apps, privacy]) {
+        [tile addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(activeContainerTapped)]];
+    }
+    return row;
+}
+
+- (MiOSGradientView *)gradientTileWithColors:(NSArray<UIColor *> *)colors radius:(CGFloat)radius {
+    MiOSGradientView *tile = [[MiOSGradientView alloc] init];
+    tile.translatesAutoresizingMaskIntoConstraints = NO;
+    [tile setColors:colors start:CGPointMake(0, 0) end:CGPointMake(1, 1)];
+    tile.layer.cornerRadius = radius;
+    tile.layer.cornerCurve = kCACornerCurveContinuous;
+    tile.layer.borderWidth = 1.0;
+    tile.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.18].CGColor;
+    tile.clipsToBounds = YES;
+    return tile;
+}
+
+- (UIView *)locationTileForContainer:(MiOSContainerConfig *)c accent:(UIColor *)accent {
+    UIColor *top = MiOSShiftedHue(accent, 0.5, 0.55, 0.78);
+    UIColor *bottom = MiOSShiftedHue(accent, 0.55, 0.65, 0.48);
+    MiOSGradientView *tile = [self gradientTileWithColors:@[top, bottom] radius:26];
+
+    // Three small "moons" in the corner, a nod to the reference tile.
+    UIStackView *moons = [[UIStackView alloc] init];
+    moons.translatesAutoresizingMaskIntoConstraints = NO;
+    moons.spacing = 5;
+    for (NSInteger i = 0; i < 3; i++) {
+        UIView *moon = [[UIView alloc] init];
+        moon.translatesAutoresizingMaskIntoConstraints = NO;
+        moon.layer.cornerRadius = 5;
+        moon.layer.borderWidth = 1.0;
+        moon.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.5].CGColor;
+        moon.backgroundColor = [UIColor colorWithWhite:1.0 alpha:(i == 1 ? 0.5 : 0.0)];
+        [moon.widthAnchor constraintEqualToConstant:10].active = YES;
+        [moon.heightAnchor constraintEqualToConstant:10].active = YES;
+        [moons addArrangedSubview:moon];
+    }
+    [tile addSubview:moons];
+
+    UIView *iconCircle = [[UIView alloc] init];
+    iconCircle.translatesAutoresizingMaskIntoConstraints = NO;
+    iconCircle.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.18];
+    iconCircle.layer.cornerRadius = 20;
+    [tile addSubview:iconCircle];
+
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightBold];
+    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"location.fill" withConfiguration:cfg]];
+    icon.translatesAutoresizingMaskIntoConstraints = NO;
+    icon.tintColor = [UIColor whiteColor];
+    [iconCircle addSubview:icon];
+
+    UILabel *title = [[UILabel alloc] init];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.numberOfLines = 2;
+    title.font = [UIFont systemFontOfSize:18 weight:UIFontWeightBold];
+    title.textColor = [UIColor whiteColor];
+    [tile addSubview:title];
+
+    UILabel *sub = [[UILabel alloc] init];
+    sub.translatesAutoresizingMaskIntoConstraints = NO;
+    sub.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+    sub.textColor = [UIColor colorWithWhite:1.0 alpha:0.75];
+    [tile addSubview:sub];
+
+    if (c.gpsEnabled) {
+        title.text = c.locationName.length > 0 ? c.locationName : @"Custom location";
+        sub.text = [NSString stringWithFormat:@"%.4f, %.4f", c.latitude, c.longitude];
+    } else {
+        title.text = @"Real location";
+        sub.text = @"GPS spoof off";
+    }
+
+    [NSLayoutConstraint activateConstraints:@[
+        [iconCircle.topAnchor constraintEqualToAnchor:tile.topAnchor constant:16],
+        [iconCircle.leadingAnchor constraintEqualToAnchor:tile.leadingAnchor constant:16],
+        [iconCircle.widthAnchor constraintEqualToConstant:40],
+        [iconCircle.heightAnchor constraintEqualToConstant:40],
+        [icon.centerXAnchor constraintEqualToAnchor:iconCircle.centerXAnchor],
+        [icon.centerYAnchor constraintEqualToAnchor:iconCircle.centerYAnchor],
+        [moons.centerYAnchor constraintEqualToAnchor:iconCircle.centerYAnchor],
+        [moons.trailingAnchor constraintEqualToAnchor:tile.trailingAnchor constant:-16],
+        [title.leadingAnchor constraintEqualToAnchor:tile.leadingAnchor constant:16],
+        [title.trailingAnchor constraintEqualToAnchor:tile.trailingAnchor constant:-16],
+        [sub.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:4],
+        [sub.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+        [sub.trailingAnchor constraintEqualToAnchor:title.trailingAnchor],
+        [sub.bottomAnchor constraintEqualToAnchor:tile.bottomAnchor constant:-16],
+    ]];
+    return tile;
+}
+
+- (UIView *)appsTileForContainer:(MiOSContainerConfig *)c accent:(UIColor *)accent {
+    UIColor *end = [MiOSColorExtractor accentGradientEndFromColor:accent] ?: accent;
+    MiOSGradientView *tile = [self gradientTileWithColors:@[accent, end] radius:22];
+    UIColor *textColor = MiOSIsLightColor(accent) ? [UIColor colorWithRed:0.12 green:0.10 blue:0.06 alpha:1.0] : [UIColor whiteColor];
+
+    UILabel *count = [[UILabel alloc] init];
+    count.translatesAutoresizingMaskIntoConstraints = NO;
+    count.text = [NSString stringWithFormat:@"%lu", (unsigned long)c.apps.count];
+    count.font = [UIFont systemFontOfSize:28 weight:UIFontWeightBold];
+    count.textColor = textColor;
+    [tile addSubview:count];
+
+    UILabel *caption = [[UILabel alloc] init];
+    caption.translatesAutoresizingMaskIntoConstraints = NO;
+    caption.text = c.apps.count == 1 ? @"app" : @"apps";
+    caption.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+    caption.textColor = [textColor colorWithAlphaComponent:0.75];
+    [tile addSubview:caption];
+
+    // Overlapping icon stack of the container's apps.
+    UIView *icons = [[UIView alloc] init];
+    icons.translatesAutoresizingMaskIntoConstraints = NO;
+    [tile addSubview:icons];
+    NSInteger shown = MIN((NSInteger)c.apps.count, 3);
+    CGFloat size = 26, step = 18;
+    for (NSInteger i = 0; i < shown; i++) {
+        UIImageView *iv = [[UIImageView alloc] init];
+        iv.translatesAutoresizingMaskIntoConstraints = NO;
+        iv.image = [MiOSAppIconProvider iconForBundleID:c.apps[i]];
+        iv.backgroundColor = [UIColor colorWithWhite:0.15 alpha:1.0];
+        iv.contentMode = UIViewContentModeScaleAspectFill;
+        iv.clipsToBounds = YES;
+        iv.layer.cornerRadius = 7;
+        iv.layer.borderWidth = 1.5;
+        iv.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.6].CGColor;
+        [icons addSubview:iv];
+        [NSLayoutConstraint activateConstraints:@[
+            [iv.trailingAnchor constraintEqualToAnchor:icons.trailingAnchor constant:-(step * (shown - 1 - i))],
+            [iv.centerYAnchor constraintEqualToAnchor:icons.centerYAnchor],
+            [iv.widthAnchor constraintEqualToConstant:size],
+            [iv.heightAnchor constraintEqualToConstant:size],
+        ]];
+    }
+
+    [NSLayoutConstraint activateConstraints:@[
+        [count.leadingAnchor constraintEqualToAnchor:tile.leadingAnchor constant:16],
+        [count.centerYAnchor constraintEqualToAnchor:tile.centerYAnchor],
+        [caption.leadingAnchor constraintEqualToAnchor:count.trailingAnchor constant:5],
+        [caption.lastBaselineAnchor constraintEqualToAnchor:count.lastBaselineAnchor],
+        [icons.trailingAnchor constraintEqualToAnchor:tile.trailingAnchor constant:-14],
+        [icons.centerYAnchor constraintEqualToAnchor:tile.centerYAnchor],
+        [icons.heightAnchor constraintEqualToConstant:size],
+        [icons.widthAnchor constraintEqualToConstant:shown > 0 ? size + step * (shown - 1) : 0],
+    ]];
+    return tile;
+}
+
+- (UIView *)privacyTileForContainer:(MiOSContainerConfig *)c accent:(UIColor *)accent {
+    UIView *tile = [[UIView alloc] init];
+    tile.translatesAutoresizingMaskIntoConstraints = NO;
+    tile.backgroundColor = [UIColor colorWithRed:0.14 green:0.15 blue:0.21 alpha:0.92];
+    tile.layer.cornerRadius = 22;
+    tile.layer.cornerCurve = kCACornerCurveContinuous;
+    tile.layer.borderWidth = 1.0;
+    tile.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
+
+    NSArray<NSNumber *> *flags = @[@(c.spoofDeviceCheck), @(c.spoofVendorID), @(c.spoofAdvertisingID),
+                                   @(c.spoofCloudToken), @(c.deviceSpoofEnabled), @(c.gpsEnabled)];
+    NSInteger onCount = 0;
+    for (NSNumber *f in flags) onCount += f.boolValue ? 1 : 0;
+
+    UILabel *title = [[UILabel alloc] init];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.text = @"Spoofing";
+    title.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+    title.textColor = [MiOSTheme secondaryText];
+    [tile addSubview:title];
+
+    UILabel *score = [[UILabel alloc] init];
+    score.translatesAutoresizingMaskIntoConstraints = NO;
+    score.text = [NSString stringWithFormat:@"%ld/%lu", (long)onCount, (unsigned long)flags.count];
+    score.font = [UIFont systemFontOfSize:13 weight:UIFontWeightBold];
+    score.textColor = accent;
+    [tile addSubview:score];
+
+    UIStackView *bars = [[UIStackView alloc] init];
+    bars.translatesAutoresizingMaskIntoConstraints = NO;
+    bars.axis = UILayoutConstraintAxisHorizontal;
+    bars.distribution = UIStackViewDistributionFillEqually;
+    bars.alignment = UIStackViewAlignmentBottom;
+    bars.spacing = 5;
+    for (NSInteger i = 0; i < (NSInteger)flags.count; i++) {
+        BOOL on = flags[i].boolValue;
+        UIView *bar = [[UIView alloc] init];
+        bar.translatesAutoresizingMaskIntoConstraints = NO;
+        bar.backgroundColor = on ? accent : [UIColor colorWithWhite:1.0 alpha:0.10];
+        bar.layer.cornerRadius = 4;
+        // Enabled bars stand taller, like the reference's equalizer tile.
+        [bar.heightAnchor constraintEqualToConstant:on ? 30 : 18].active = YES;
+        [bars addArrangedSubview:bar];
+    }
+    [tile addSubview:bars];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [title.topAnchor constraintEqualToAnchor:tile.topAnchor constant:14],
+        [title.leadingAnchor constraintEqualToAnchor:tile.leadingAnchor constant:14],
+        [score.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
+        [score.trailingAnchor constraintEqualToAnchor:tile.trailingAnchor constant:-14],
+        [bars.leadingAnchor constraintEqualToAnchor:tile.leadingAnchor constant:14],
+        [bars.trailingAnchor constraintEqualToAnchor:tile.trailingAnchor constant:-14],
+        [bars.bottomAnchor constraintEqualToAnchor:tile.bottomAnchor constant:-14],
+        [bars.heightAnchor constraintEqualToConstant:30],
+    ]];
+    return tile;
+}
+
+#pragma mark - New Container Card
+
+- (UIView *)buildNewContainerCardWithAccent:(UIColor *)accent {
+    UIView *host = [[UIView alloc] init];
+    host.translatesAutoresizingMaskIntoConstraints = NO;
+    host.layer.shadowColor = accent.CGColor;
+    host.layer.shadowOffset = CGSizeMake(0, 8);
+    host.layer.shadowRadius = 18;
+    host.layer.shadowOpacity = 0.35;
+
+    UIColor *end = [MiOSColorExtractor accentGradientEndFromColor:accent] ?: accent;
+    MiOSGradientView *card = [self gradientTileWithColors:@[accent, end] radius:28];
+    card.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.28].CGColor;
+    [host addSubview:card];
+
+    // Top sheen for a glossy, textured surface.
+    MiOSGradientView *sheen = [[MiOSGradientView alloc] init];
+    sheen.translatesAutoresizingMaskIntoConstraints = NO;
+    sheen.userInteractionEnabled = NO;
+    [sheen setColors:@[[UIColor colorWithWhite:1.0 alpha:0.22], [UIColor colorWithWhite:1.0 alpha:0.0]]
+               start:CGPointMake(0.5, 0.0) end:CGPointMake(0.5, 0.7)];
+    [card addSubview:sheen];
+
+    // Half-moon ornaments on both edges.
+    NSMutableArray *moonConstraints = [NSMutableArray array];
+    for (NSInteger side = 0; side < 2; side++) {
+        UIView *outer = [[UIView alloc] init];
+        outer.translatesAutoresizingMaskIntoConstraints = NO;
+        outer.userInteractionEnabled = NO;
+        outer.layer.cornerRadius = 45;
+        outer.layer.borderWidth = 1.5;
+        outer.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.30].CGColor;
+        [card addSubview:outer];
+
+        UIView *inner = [[UIView alloc] init];
+        inner.translatesAutoresizingMaskIntoConstraints = NO;
+        inner.userInteractionEnabled = NO;
+        inner.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.14];
+        inner.layer.cornerRadius = 28;
+        [card addSubview:inner];
+
+        NSLayoutXAxisAnchor *edge = side == 0 ? card.leadingAnchor : card.trailingAnchor;
+        [moonConstraints addObjectsFromArray:@[
+            [outer.centerXAnchor constraintEqualToAnchor:edge],
+            [outer.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
+            [outer.widthAnchor constraintEqualToConstant:90],
+            [outer.heightAnchor constraintEqualToConstant:90],
+            [inner.centerXAnchor constraintEqualToAnchor:edge],
+            [inner.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
+            [inner.widthAnchor constraintEqualToConstant:56],
+            [inner.heightAnchor constraintEqualToConstant:56],
+        ]];
+    }
+
+    UIColor *textColor = MiOSIsLightColor(accent) ? [UIColor colorWithRed:0.12 green:0.10 blue:0.06 alpha:1.0] : [UIColor whiteColor];
+
+    UILabel *title = [[UILabel alloc] init];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.text = @"New Container";
+    title.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold];
+    title.textColor = textColor;
+    title.textAlignment = NSTextAlignmentCenter;
+    [card addSubview:title];
+
+    UILabel *sub = [[UILabel alloc] init];
+    sub.translatesAutoresizingMaskIntoConstraints = NO;
+    sub.text = @"Isolate apps · spoof GPS, device & IDs";
+    sub.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+    sub.textColor = [textColor colorWithAlphaComponent:0.8];
+    sub.textAlignment = NSTextAlignmentCenter;
+    sub.adjustsFontSizeToFitWidth = YES;
+    sub.minimumScaleFactor = 0.8;
+    [card addSubview:sub];
+
+    [NSLayoutConstraint activateConstraints:moonConstraints];
+    [NSLayoutConstraint activateConstraints:@[
+        [host.heightAnchor constraintEqualToConstant:100],
+        [card.topAnchor constraintEqualToAnchor:host.topAnchor],
+        [card.leadingAnchor constraintEqualToAnchor:host.leadingAnchor],
+        [card.trailingAnchor constraintEqualToAnchor:host.trailingAnchor],
+        [card.bottomAnchor constraintEqualToAnchor:host.bottomAnchor],
+        [sheen.topAnchor constraintEqualToAnchor:card.topAnchor],
+        [sheen.leadingAnchor constraintEqualToAnchor:card.leadingAnchor],
+        [sheen.trailingAnchor constraintEqualToAnchor:card.trailingAnchor],
+        [sheen.bottomAnchor constraintEqualToAnchor:card.bottomAnchor],
+        [title.centerXAnchor constraintEqualToAnchor:card.centerXAnchor],
+        [title.bottomAnchor constraintEqualToAnchor:card.centerYAnchor constant:2],
+        [sub.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:4],
+        [sub.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:56],
+        [sub.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-56],
+    ]];
+
+    [host addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(newContainerTapped:)]];
+    return host;
+}
+
+#pragma mark - Actions
+
+- (void)statusPillTapped {
+    BOOL enabled = ![_corePrefs[@"enabled"] boolValue];
+    _corePrefs[@"enabled"] = @(enabled);
+    [self savePreferences];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    [self rebuildContent];
+}
+
+- (void)activeContainerTapped {
+    MiOSContainerConfig *active = [self activeContainer];
+    if (active) [self presentEditorForContainer:active];
 }
 
 - (void)newContainerTapped:(UITapGestureRecognizer *)sender {
-    UIView *btn = sender.view;
+    UIView *card = sender.view;
     [UIView animateWithDuration:0.08 animations:^{
-        btn.transform = CGAffineTransformMakeScale(0.97, 0.97);
-        btn.alpha = 0.85;
+        card.transform = CGAffineTransformMakeScale(0.97, 0.97);
     } completion:^(BOOL finished) {
-        [UIView animateWithDuration:0.15 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:0 animations:^{
-            btn.transform = CGAffineTransformIdentity;
-            btn.alpha = 1.0;
+        [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:0 animations:^{
+            card.transform = CGAffineTransformIdentity;
         } completion:nil];
     }];
-
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-    [haptic impactOccurred];
-
-    MiOSContainerCreateViewController *vc = [[MiOSContainerCreateViewController alloc] init];
-    __weak typeof(self) weakSelf = self;
-    vc.onSave = ^{
-        [weakSelf reloadContainers];
-    };
-    vc.modalPresentationStyle = UIModalPresentationPageSheet;
-    [self presentViewController:vc animated:YES completion:nil];
+    [self presentEditorForContainer:nil];
 }
 
-#pragma mark - Edit Container
-
-- (void)editContainerWithID:(NSString *)containerID {
-    MiOSContainerConfig *config = nil;
-    for (MiOSContainerConfig *c in _containers) {
-        if ([c.identifier isEqualToString:containerID]) {
-            config = c;
-            break;
-        }
-    }
-    if (!config) return;
-
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [haptic impactOccurred];
-
+- (void)presentEditorForContainer:(MiOSContainerConfig *)container {
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     MiOSContainerCreateViewController *vc = [[MiOSContainerCreateViewController alloc] init];
-    vc.editingContainer = config;
+    vc.editingContainer = container;
     __weak typeof(self) weakSelf = self;
     vc.onSave = ^{
         [weakSelf reloadContainers];
