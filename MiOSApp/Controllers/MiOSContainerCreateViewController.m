@@ -741,9 +741,11 @@ static NSString *const kAppCellReuseID = @"MiOSAppCollectionCell";
     vendorCell.delegate = self;
     [section addCellView:vendorCell];
 
+    UILabel *vendorLabelOut = nil;
     _vendorIDContainer = [self buildUUIDRowWithValue:_vendorID ?: @"Not generated"
-                                          labelOut:&_vendorIDLabel
+                                          labelOut:&vendorLabelOut
                                        generateSel:@selector(generateVendorID)];
+    _vendorIDLabel = vendorLabelOut;
     _vendorIDContainer.hidden = !_spoofVendorID;
     [section addCellView:_vendorIDContainer];
     [section addSeparator];
@@ -759,9 +761,11 @@ static NSString *const kAppCellReuseID = @"MiOSAppCollectionCell";
     adCell.delegate = self;
     [section addCellView:adCell];
 
+    UILabel *adLabelOut = nil;
     _advertisingIDContainer = [self buildUUIDRowWithValue:_advertisingID ?: @"Not generated"
-                                               labelOut:&_advertisingIDLabel
+                                               labelOut:&adLabelOut
                                             generateSel:@selector(generateAdvertisingID)];
+    _advertisingIDLabel = adLabelOut;
     _advertisingIDContainer.hidden = !_spoofAdvertisingID;
     [section addCellView:_advertisingIDContainer];
     [section addSeparator];
