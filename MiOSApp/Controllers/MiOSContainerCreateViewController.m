@@ -1038,7 +1038,6 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     [_deviceCardContainer addSubview:deviceCard];
 
     // Device icon (SF Symbol)
-    UIImageSymbolConfiguration *devCfg = [UIImageSymbolConfiguration configurationWithPointSize:60 weight:UIImageSymbolWeightLight];
     _deviceIconView = [[UIImageView alloc] init];
     _deviceIconView.translatesAutoresizingMaskIntoConstraints = NO;
     _deviceIconView.contentMode = UIViewContentModeScaleAspectFit;
