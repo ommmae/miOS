@@ -1,0 +1,5 @@
+(version 1)
+(allow file-read* file-write*
+    (subpath "/var/mobile/Library/Preferences/MiOS"))
+(allow file-read*
+    (subpath "/var/mobile/Containers/Data/Application"))
