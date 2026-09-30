@@ -83,12 +83,7 @@ static NSString *spoofedIOSVersion(void) {
 // MARK: - Per-container spoof prefs (like Ghost)
 
 static NSDictionary *cachedContainerSpoofPrefs(void) {
-    static NSDictionary *prefs = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        prefs = [[MiOSContainerManager sharedManager] spoofPrefsForBundleID:currentBundleID()];
-    });
-    return prefs;
+    return [[MiOSContainerManager sharedManager] spoofPrefsForBundleID:currentBundleID()] ?: @{};
 }
 
 // MARK: - Container Redirect Hooks
@@ -541,13 +536,6 @@ static CFTypeRef hook_MGCopyAnswer(CFStringRef key) {
             }
         }
 
-        NSDictionary *containerSpoof = cachedContainerSpoofPrefs();
-        BOOL needIdHooks = [containerSpoof[@"spoofVendorID"] boolValue] ||
-                           [containerSpoof[@"spoofAdvertisingID"] boolValue] ||
-                           [containerSpoof[@"spoofDeviceCheck"] boolValue] ||
-                           [containerSpoof[@"spoofCloudToken"] boolValue];
-        if (needIdHooks) {
-            %init(IdentifierSpoofHooks);
-        }
+        %init(IdentifierSpoofHooks);
     }
 }
