@@ -910,6 +910,11 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
         _mapPin.coordinate = coord;
         _mapPin.title = @"Spoofed Location";
         [_mapView addAnnotation:_mapPin];
+    } else {
+        // Default to a zoomed-out region so map tiles load instead of a blank world view.
+        CLLocationCoordinate2D fallback = CLLocationCoordinate2DMake(37.7749, -122.4194);
+        MKCoordinateRegion region = MKCoordinateRegionMakeWithDistance(fallback, 400000, 400000);
+        [_mapView setRegion:region animated:NO];
     }
 
     // Coordinate label below map
@@ -1883,24 +1888,43 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
 
     MKLocalSearchCompletion *completion = _locationSearchResults[indexPath.row];
+    NSString *displayName = completion.title;
+    NSString *queryString = completion.subtitle.length > 0
+        ? [NSString stringWithFormat:@"%@ %@", completion.title, completion.subtitle]
+        : completion.title;
+
+    // Dismiss the search UI immediately so the selection feels instant.
+    _locationSearchBar.text = @"";
+    _locationSearchBar.showsCancelButton = NO;
+    [_locationSearchBar resignFirstResponder];
+    _locationSearchResults = @[];
+    _locationSearchResultsTable.hidden = YES;
+    [_locationSearchResultsTable reloadData];
+
+    __weak typeof(self) weakSelf = self;
+    void (^applyCoord)(CLLocationCoordinate2D) = ^(CLLocationCoordinate2D coord) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf setMapLocationToCoordinate:coord];
+            weakSelf.selectedLocationName = displayName;
+            MKCoordinateRegion region = MKCoordinateRegionMakeWithDistance(coord, 5000, 5000);
+            [weakSelf.mapView setRegion:region animated:YES];
+        });
+    };
+
     MKLocalSearchRequest *request = [[MKLocalSearchRequest alloc] initWithCompletion:completion];
     MKLocalSearch *search = [[MKLocalSearch alloc] initWithRequest:request];
-    __weak typeof(self) weakSelf = self;
     [search startWithCompletionHandler:^(MKLocalSearchResponse *response, NSError *error) {
         MKMapItem *item = response.mapItems.firstObject;
-        if (!item) return;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [weakSelf setMapLocationToCoordinate:item.placemark.coordinate];
-            weakSelf.selectedLocationName = item.name;
-            MKCoordinateRegion region = MKCoordinateRegionMakeWithDistance(item.placemark.coordinate, 5000, 5000);
-            [weakSelf.mapView setRegion:region animated:YES];
-            weakSelf.locationSearchBar.text = @"";
-            weakSelf.locationSearchBar.showsCancelButton = NO;
-            [weakSelf.locationSearchBar resignFirstResponder];
-            weakSelf.locationSearchResults = @[];
-            weakSelf.locationSearchResultsTable.hidden = YES;
-            [weakSelf.locationSearchResultsTable reloadData];
-        });
+        if (item) {
+            applyCoord(item.placemark.coordinate);
+            return;
+        }
+        // Fallback: resolve the completion text via geocoder so a pick always sets a location.
+        CLGeocoder *geocoder = [[CLGeocoder alloc] init];
+        [geocoder geocodeAddressString:queryString completionHandler:^(NSArray<CLPlacemark *> *placemarks, NSError *geoErr) {
+            CLLocation *loc = placemarks.firstObject.location;
+            if (loc) applyCoord(loc.coordinate);
+        }];
     }];
 }
 

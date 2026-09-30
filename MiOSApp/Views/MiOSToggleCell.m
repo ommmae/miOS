@@ -48,6 +48,10 @@
     _titleLabel.text = _title;
     _titleLabel.font = [MiOSTheme headlineFont];
     _titleLabel.textColor = [MiOSTheme primaryText];
+    _titleLabel.numberOfLines = 1;
+    _titleLabel.adjustsFontSizeToFitWidth = YES;
+    _titleLabel.minimumScaleFactor = 0.75;
+    [_titleLabel setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
     [self addSubview:_titleLabel];
 
     _subtitleLabel = [[UILabel alloc] init];
@@ -157,6 +161,10 @@
     _titleLabel.text = _title;
     _titleLabel.font = [MiOSTheme headlineFont];
     _titleLabel.textColor = [MiOSTheme primaryText];
+    _titleLabel.numberOfLines = 1;
+    _titleLabel.adjustsFontSizeToFitWidth = YES;
+    _titleLabel.minimumScaleFactor = 0.75;
+    [_titleLabel setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
     [self addSubview:_titleLabel];
 
     _subtitleLabel = [[UILabel alloc] init];

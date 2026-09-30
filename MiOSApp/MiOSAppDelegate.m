@@ -1,6 +1,6 @@
 #import "MiOSAppDelegate.h"
 #import "Views/MiOSLoadingView.h"
-#import "Controllers/MiOSHomeViewController.h"
+#import "Controllers/MiOSTabBarController.h"
 #import "UI/MiOSTheme.h"
 
 @implementation MiOSAppDelegate
@@ -9,14 +9,9 @@
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     self.window.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
 
-    MiOSHomeViewController *homeVC = [[MiOSHomeViewController alloc] init];
-    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:homeVC];
-    nav.navigationBar.prefersLargeTitles = YES;
-    nav.navigationBar.barStyle = UIBarStyleBlack;
-    nav.navigationBar.tintColor = [MiOSTheme accentColor];
-    [MiOSTheme styleNavigationBar:nav.navigationBar];
+    MiOSTabBarController *tabBar = [[MiOSTabBarController alloc] init];
 
-    self.window.rootViewController = nav;
+    self.window.rootViewController = tabBar;
     self.window.tintColor = [MiOSTheme accentColor];
     self.window.backgroundColor = [MiOSTheme primaryBackground];
     [self.window makeKeyAndVisible];
