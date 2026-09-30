@@ -7,8 +7,6 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = MiOSTweak
 MiOSTweak_FILES = $(wildcard MiOSTweak/*.x) $(wildcard MiOSTweak/*.m)
 MiOSTweak_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
-MiOSTweak_PRIVATE_FRAMEWORKS = CoreLocation
-MiOSTweak_LIBRARIES = sandy
 MiOSTweak_FRAMEWORKS = Foundation CoreFoundation UIKit CoreLocation
 
 APPLICATION_NAME = MiOS

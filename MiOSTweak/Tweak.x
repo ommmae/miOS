@@ -1,10 +1,22 @@
 #import <Foundation/Foundation.h>
 #import <CoreLocation/CoreLocation.h>
 #import <objc/runtime.h>
+#import <dlfcn.h>
 #import "MiOSContainerManager.h"
 #import "MiOSLocationManager.h"
 
-extern void libSandy_applyProfile(const char *profileName);
+typedef int (*libSandy_applyProfile_t)(const char *profileName);
+
+static void applySandyProfile(const char *profileName) {
+    static libSandy_applyProfile_t fn = NULL;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        void *handle = dlopen("/usr/lib/libsandy.dylib", RTLD_LAZY);
+        if (!handle) handle = dlopen("/var/jb/usr/lib/libsandy.dylib", RTLD_LAZY);
+        if (handle) fn = (libSandy_applyProfile_t)dlsym(handle, "libSandy_applyProfile");
+    });
+    if (fn) fn(profileName);
+}
 
 static NSString *currentBundleID(void) {
     return [[NSBundle mainBundle] bundleIdentifier];
@@ -245,7 +257,7 @@ static NSDictionary *appPrefs(void) {
         NSString *bid = currentBundleID();
         if ([bid isEqualToString:@"com.mios.app"]) return;
 
-        libSandy_applyProfile("MiOS-Profile");
+        applySandyProfile("MiOS-Profile");
 
         NSDictionary *prefs = appPrefs();
         BOOL containerEnabled = [prefs[@"containerEnabled"] boolValue];
