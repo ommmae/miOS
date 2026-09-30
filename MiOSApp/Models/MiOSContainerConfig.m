@@ -80,6 +80,7 @@ static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/
         _gpsEnabled = [dict[@"gpsEnabled"] boolValue];
         _latitude = [dict[@"latitude"] doubleValue];
         _longitude = [dict[@"longitude"] doubleValue];
+        _locationName = dict[@"locationName"] ?: @"";
 
         // Device
         _deviceSpoofEnabled = [dict[@"deviceSpoofEnabled"] boolValue];
@@ -87,6 +88,9 @@ static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/
         _deviceName = dict[@"deviceName"] ?: @"";
         _hwModel = dict[@"hwModel"] ?: @"";
         _iosVersion = dict[@"iosVersion"] ?: @"";
+        _storageSizeGB = [dict[@"storageSizeGB"] integerValue];
+        _customDeviceName = dict[@"customDeviceName"] ?: @"";
+        _spoofDeviceName = [dict[@"spoofDeviceName"] boolValue];
 
         // Identifiers
         _spoofDeviceCheck = [dict[@"spoofDeviceCheck"] boolValue];
@@ -107,11 +111,15 @@ static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/
         @"gpsEnabled": @(self.gpsEnabled),
         @"latitude": @(self.latitude),
         @"longitude": @(self.longitude),
+        @"locationName": self.locationName ?: @"",
         @"deviceSpoofEnabled": @(self.deviceSpoofEnabled),
         @"deviceIdentifier": self.deviceIdentifier ?: @"",
         @"deviceName": self.deviceName ?: @"",
         @"hwModel": self.hwModel ?: @"",
         @"iosVersion": self.iosVersion ?: @"",
+        @"storageSizeGB": @(self.storageSizeGB),
+        @"customDeviceName": self.customDeviceName ?: @"",
+        @"spoofDeviceName": @(self.spoofDeviceName),
         @"spoofDeviceCheck": @(self.spoofDeviceCheck),
         @"spoofVendorID": @(self.spoofVendorID),
         @"vendorID": self.vendorID ?: @"",
@@ -187,6 +195,9 @@ static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/
             @"deviceName": self.deviceName ?: @"",
             @"hwModel": self.hwModel ?: @"",
             @"iosVersion": self.iosVersion ?: @"",
+            @"storageSizeGB": @(self.storageSizeGB),
+            @"customDeviceName": self.customDeviceName ?: @"",
+            @"spoofDeviceName": @(self.spoofDeviceName),
         };
         [spoofPrefs writeToFile:spoofPlistPath atomically:YES];
 
@@ -210,6 +221,9 @@ static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/
         @"deviceName": self.deviceName ?: @"",
         @"hwModel": self.hwModel ?: @"",
         @"iosVersion": self.iosVersion ?: @"",
+        @"storageSizeGB": @(self.storageSizeGB),
+        @"customDeviceName": self.customDeviceName ?: @"",
+        @"spoofDeviceName": @(self.spoofDeviceName),
     };
     [deviceSpoofPrefs writeToFile:deviceSpoofPath atomically:YES];
 

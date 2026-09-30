@@ -7,6 +7,10 @@
 @property (nonatomic, copy) NSString *minIOS;
 @property (nonatomic, copy) NSString *maxIOS;
 @property (nonatomic, copy) NSString *sfSymbol;
+@property (nonatomic, copy) NSString *chipName;
+@property (nonatomic, assign) NSInteger ramGB;
+@property (nonatomic, assign) NSInteger cpuCores;
+@property (nonatomic, strong) NSArray<NSNumber *> *storageOptions;
 @end
 
 @interface MiOSDeviceDatabase : NSObject

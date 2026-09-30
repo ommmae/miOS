@@ -5,7 +5,10 @@
 
 @implementation MiOSDeviceDatabase
 
-static MiOSDeviceModel *makeDevice(NSString *ident, NSString *name, NSString *hw, NSString *minV, NSString *maxV, NSString *sym) {
+static MiOSDeviceModel *makeDevice(NSString *ident, NSString *name, NSString *hw,
+                                    NSString *minV, NSString *maxV, NSString *sym,
+                                    NSString *chip, NSInteger ram, NSInteger cores,
+                                    NSArray<NSNumber *> *storage) {
     MiOSDeviceModel *d = [[MiOSDeviceModel alloc] init];
     d.identifier = ident;
     d.displayName = name;
@@ -13,6 +16,10 @@ static MiOSDeviceModel *makeDevice(NSString *ident, NSString *name, NSString *hw
     d.minIOS = minV;
     d.maxIOS = maxV;
     d.sfSymbol = sym;
+    d.chipName = chip;
+    d.ramGB = ram;
+    d.cpuCores = cores;
+    d.storageOptions = storage;
     return d;
 }
 
@@ -21,42 +28,78 @@ static MiOSDeviceModel *makeDevice(NSString *ident, NSString *name, NSString *hw
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         devices = @[
-            makeDevice(@"iPhone9,1",  @"iPhone 7",          @"D10AP",  @"10.0", @"15.8", @"iphone"),
-            makeDevice(@"iPhone9,2",  @"iPhone 7 Plus",     @"D11AP",  @"10.0", @"15.8", @"iphone"),
-            makeDevice(@"iPhone10,1", @"iPhone 8",          @"D20AP",  @"11.0", @"16.7", @"iphone"),
-            makeDevice(@"iPhone10,2", @"iPhone 8 Plus",     @"D21AP",  @"11.0", @"16.7", @"iphone"),
-            makeDevice(@"iPhone10,3", @"iPhone X",          @"D22AP",  @"11.0", @"16.7", @"iphone"),
-            makeDevice(@"iPhone11,8", @"iPhone XR",         @"N841AP", @"12.0", @"17.7", @"iphone"),
-            makeDevice(@"iPhone11,2", @"iPhone XS",         @"D321AP", @"12.0", @"17.7", @"iphone"),
-            makeDevice(@"iPhone11,6", @"iPhone XS Max",     @"D331AP", @"12.0", @"17.7", @"iphone"),
-            makeDevice(@"iPhone12,1", @"iPhone 11",         @"N104AP", @"13.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone12,3", @"iPhone 11 Pro",     @"D421AP", @"13.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone12,5", @"iPhone 11 Pro Max", @"D431AP", @"13.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone13,1", @"iPhone 12 mini",    @"D52gAP", @"14.1", @"18.5", @"iphone"),
-            makeDevice(@"iPhone13,2", @"iPhone 12",         @"D53gAP", @"14.1", @"18.5", @"iphone"),
-            makeDevice(@"iPhone13,3", @"iPhone 12 Pro",     @"D53pAP", @"14.1", @"18.5", @"iphone"),
-            makeDevice(@"iPhone13,4", @"iPhone 12 Pro Max", @"D54pAP", @"14.1", @"18.5", @"iphone"),
-            makeDevice(@"iPhone14,4", @"iPhone 13 mini",    @"D16AP",  @"15.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone14,5", @"iPhone 13",         @"D17AP",  @"15.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone14,2", @"iPhone 13 Pro",     @"D63AP",  @"15.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone14,3", @"iPhone 13 Pro Max", @"D64AP",  @"15.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone14,7", @"iPhone 14",         @"D27AP",  @"16.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone14,8", @"iPhone 14 Plus",    @"D28AP",  @"16.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone15,2", @"iPhone 14 Pro",     @"D73AP",  @"16.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone15,3", @"iPhone 14 Pro Max", @"D74AP",  @"16.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone15,4", @"iPhone 15",         @"D37AP",  @"17.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone15,5", @"iPhone 15 Plus",    @"D38AP",  @"17.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone16,1", @"iPhone 15 Pro",     @"D83AP",  @"17.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone16,2", @"iPhone 15 Pro Max", @"D84AP",  @"17.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone17,3", @"iPhone 16",         @"D47AP",  @"18.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone17,4", @"iPhone 16 Plus",    @"D48AP",  @"18.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone17,1", @"iPhone 16 Pro",     @"D93AP",  @"18.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone17,2", @"iPhone 16 Pro Max", @"D94AP",  @"18.0", @"18.5", @"iphone"),
-            makeDevice(@"iPhone18,1", @"iPhone 16e",        @"D57AP",  @"18.3", @"18.5", @"iphone"),
-            makeDevice(@"iPhone18,3", @"iPhone 17 Air",     @"D87AP",  @"18.4", @"18.5", @"iphone"),
-            makeDevice(@"iPhone18,4", @"iPhone 17",         @"D88AP",  @"18.4", @"18.5", @"iphone"),
-            makeDevice(@"iPhone18,5", @"iPhone 17 Pro",     @"D99AP",  @"18.4", @"18.5", @"iphone"),
-            makeDevice(@"iPhone18,6", @"iPhone 17 Pro Max", @"D100AP", @"18.4", @"18.5", @"iphone"),
+            makeDevice(@"iPhone9,1",  @"iPhone 7",          @"D10AP",  @"10.0", @"15.8", @"iphone",
+                       @"A10 Fusion", 2, 4, @[@32, @128, @256]),
+            makeDevice(@"iPhone9,2",  @"iPhone 7 Plus",     @"D11AP",  @"10.0", @"15.8", @"iphone",
+                       @"A10 Fusion", 3, 4, @[@32, @128, @256]),
+            makeDevice(@"iPhone10,1", @"iPhone 8",          @"D20AP",  @"11.0", @"16.7", @"iphone",
+                       @"A11 Bionic", 2, 6, @[@64, @256]),
+            makeDevice(@"iPhone10,2", @"iPhone 8 Plus",     @"D21AP",  @"11.0", @"16.7", @"iphone",
+                       @"A11 Bionic", 3, 6, @[@64, @256]),
+            makeDevice(@"iPhone10,3", @"iPhone X",          @"D22AP",  @"11.0", @"16.7", @"iphone",
+                       @"A11 Bionic", 3, 6, @[@64, @256]),
+            makeDevice(@"iPhone11,8", @"iPhone XR",         @"N841AP", @"12.0", @"17.7", @"iphone",
+                       @"A12 Bionic", 3, 6, @[@64, @128, @256]),
+            makeDevice(@"iPhone11,2", @"iPhone XS",         @"D321AP", @"12.0", @"17.7", @"iphone",
+                       @"A12 Bionic", 4, 6, @[@64, @256, @512]),
+            makeDevice(@"iPhone11,6", @"iPhone XS Max",     @"D331AP", @"12.0", @"17.7", @"iphone",
+                       @"A12 Bionic", 4, 6, @[@64, @256, @512]),
+            makeDevice(@"iPhone12,1", @"iPhone 11",         @"N104AP", @"13.0", @"18.5", @"iphone",
+                       @"A13 Bionic", 4, 6, @[@64, @128, @256]),
+            makeDevice(@"iPhone12,3", @"iPhone 11 Pro",     @"D421AP", @"13.0", @"18.5", @"iphone",
+                       @"A13 Bionic", 4, 6, @[@64, @256, @512]),
+            makeDevice(@"iPhone12,5", @"iPhone 11 Pro Max", @"D431AP", @"13.0", @"18.5", @"iphone",
+                       @"A13 Bionic", 4, 6, @[@64, @256, @512]),
+            makeDevice(@"iPhone13,1", @"iPhone 12 mini",    @"D52gAP", @"14.1", @"18.5", @"iphone",
+                       @"A14 Bionic", 4, 6, @[@64, @128, @256]),
+            makeDevice(@"iPhone13,2", @"iPhone 12",         @"D53gAP", @"14.1", @"18.5", @"iphone",
+                       @"A14 Bionic", 4, 6, @[@64, @128, @256]),
+            makeDevice(@"iPhone13,3", @"iPhone 12 Pro",     @"D53pAP", @"14.1", @"18.5", @"iphone",
+                       @"A14 Bionic", 6, 6, @[@128, @256, @512]),
+            makeDevice(@"iPhone13,4", @"iPhone 12 Pro Max", @"D54pAP", @"14.1", @"18.5", @"iphone",
+                       @"A14 Bionic", 6, 6, @[@128, @256, @512]),
+            makeDevice(@"iPhone14,4", @"iPhone 13 mini",    @"D16AP",  @"15.0", @"18.5", @"iphone",
+                       @"A15 Bionic", 4, 6, @[@128, @256, @512]),
+            makeDevice(@"iPhone14,5", @"iPhone 13",         @"D17AP",  @"15.0", @"18.5", @"iphone",
+                       @"A15 Bionic", 4, 6, @[@128, @256, @512]),
+            makeDevice(@"iPhone14,2", @"iPhone 13 Pro",     @"D63AP",  @"15.0", @"18.5", @"iphone",
+                       @"A15 Bionic", 6, 6, @[@128, @256, @512, @1024]),
+            makeDevice(@"iPhone14,3", @"iPhone 13 Pro Max", @"D64AP",  @"15.0", @"18.5", @"iphone",
+                       @"A15 Bionic", 6, 6, @[@128, @256, @512, @1024]),
+            makeDevice(@"iPhone14,7", @"iPhone 14",         @"D27AP",  @"16.0", @"18.5", @"iphone",
+                       @"A15 Bionic", 6, 6, @[@128, @256, @512]),
+            makeDevice(@"iPhone14,8", @"iPhone 14 Plus",    @"D28AP",  @"16.0", @"18.5", @"iphone",
+                       @"A15 Bionic", 6, 6, @[@128, @256, @512]),
+            makeDevice(@"iPhone15,2", @"iPhone 14 Pro",     @"D73AP",  @"16.0", @"18.5", @"iphone",
+                       @"A16 Bionic", 6, 6, @[@128, @256, @512, @1024]),
+            makeDevice(@"iPhone15,3", @"iPhone 14 Pro Max", @"D74AP",  @"16.0", @"18.5", @"iphone",
+                       @"A16 Bionic", 6, 6, @[@128, @256, @512, @1024]),
+            makeDevice(@"iPhone15,4", @"iPhone 15",         @"D37AP",  @"17.0", @"18.5", @"iphone",
+                       @"A16 Bionic", 6, 6, @[@128, @256, @512]),
+            makeDevice(@"iPhone15,5", @"iPhone 15 Plus",    @"D38AP",  @"17.0", @"18.5", @"iphone",
+                       @"A16 Bionic", 6, 6, @[@128, @256, @512]),
+            makeDevice(@"iPhone16,1", @"iPhone 15 Pro",     @"D83AP",  @"17.0", @"18.5", @"iphone",
+                       @"A17 Pro", 8, 6, @[@128, @256, @512, @1024]),
+            makeDevice(@"iPhone16,2", @"iPhone 15 Pro Max", @"D84AP",  @"17.0", @"18.5", @"iphone",
+                       @"A17 Pro", 8, 6, @[@256, @512, @1024]),
+            makeDevice(@"iPhone17,3", @"iPhone 16",         @"D47AP",  @"18.0", @"18.5", @"iphone",
+                       @"A18", 8, 6, @[@128, @256, @512]),
+            makeDevice(@"iPhone17,4", @"iPhone 16 Plus",    @"D48AP",  @"18.0", @"18.5", @"iphone",
+                       @"A18", 8, 6, @[@128, @256, @512]),
+            makeDevice(@"iPhone17,1", @"iPhone 16 Pro",     @"D93AP",  @"18.0", @"18.5", @"iphone",
+                       @"A18 Pro", 8, 6, @[@128, @256, @512, @1024]),
+            makeDevice(@"iPhone17,2", @"iPhone 16 Pro Max", @"D94AP",  @"18.0", @"18.5", @"iphone",
+                       @"A18 Pro", 8, 6, @[@256, @512, @1024]),
+            makeDevice(@"iPhone18,1", @"iPhone 16e",        @"D57AP",  @"18.3", @"18.5", @"iphone",
+                       @"A16", 8, 6, @[@128, @256, @512]),
+            makeDevice(@"iPhone18,3", @"iPhone 17 Air",     @"D87AP",  @"18.4", @"18.5", @"iphone",
+                       @"A19", 8, 6, @[@128, @256, @512]),
+            makeDevice(@"iPhone18,4", @"iPhone 17",         @"D88AP",  @"18.4", @"18.5", @"iphone",
+                       @"A19", 8, 6, @[@128, @256, @512]),
+            makeDevice(@"iPhone18,5", @"iPhone 17 Pro",     @"D99AP",  @"18.4", @"18.5", @"iphone",
+                       @"A19 Pro", 12, 6, @[@256, @512, @1024]),
+            makeDevice(@"iPhone18,6", @"iPhone 17 Pro Max", @"D100AP", @"18.4", @"18.5", @"iphone",
+                       @"A19 Pro", 12, 6, @[@256, @512, @1024]),
         ];
     });
     return devices;

@@ -8,12 +8,16 @@
 @property (nonatomic, assign) BOOL gpsEnabled;
 @property (nonatomic, assign) double latitude;
 @property (nonatomic, assign) double longitude;
+@property (nonatomic, copy) NSString *locationName;
 // Device
 @property (nonatomic, assign) BOOL deviceSpoofEnabled;
 @property (nonatomic, copy) NSString *deviceIdentifier;
 @property (nonatomic, copy) NSString *deviceName;
 @property (nonatomic, copy) NSString *hwModel;
 @property (nonatomic, copy) NSString *iosVersion;
+@property (nonatomic, assign) NSInteger storageSizeGB;
+@property (nonatomic, copy) NSString *customDeviceName;
+@property (nonatomic, assign) BOOL spoofDeviceName;
 // Identifiers
 @property (nonatomic, assign) BOOL spoofDeviceCheck;
 @property (nonatomic, assign) BOOL spoofVendorID;
