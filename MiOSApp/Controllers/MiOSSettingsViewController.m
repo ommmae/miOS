@@ -2,6 +2,9 @@
 #import "../Views/MiOSSectionCardView.h"
 #import "../Views/MiOSToggleCell.h"
 #import "../UI/MiOSTheme.h"
+#import <spawn.h>
+
+extern char **environ;
 
 @interface MiOSSettingsViewController ()
 @property (nonatomic, strong) UIScrollView *scrollView;
@@ -123,8 +126,7 @@
             message:@"Restart SpringBoard to apply changes?"
             preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"Respring" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-            NSTask *task = [[NSTask alloc] init];
-            // Uses killall for respring
+            [weakSelf respring];
         }]];
         [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         [weakSelf presentViewController:alert animated:YES completion:nil];
@@ -132,6 +134,22 @@
     [section addCellView:respringCell];
 
     [_mainStack addArrangedSubview:section];
+}
+
+- (void)respring {
+    NSArray *killallPaths = @[@"/usr/bin/killall", @"/var/jb/usr/bin/killall"];
+    NSString *killall = nil;
+    for (NSString *path in killallPaths) {
+        if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
+            killall = path;
+            break;
+        }
+    }
+    if (!killall) killall = @"/usr/bin/killall";
+
+    const char *args[] = { killall.UTF8String, "-9", "SpringBoard", NULL };
+    pid_t pid;
+    posix_spawn(&pid, killall.UTF8String, NULL, NULL, (char *const *)args, environ);
 }
 
 - (void)buildInfoSection {
