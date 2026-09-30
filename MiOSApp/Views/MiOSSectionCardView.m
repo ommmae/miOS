@@ -3,6 +3,7 @@
 
 @implementation MiOSSectionCardView {
     UILabel *_headerLabel;
+    UIView *_cardBg;
 }
 
 - (instancetype)initWithTitle:(NSString *)title {
@@ -24,20 +25,16 @@
     _headerLabel.hidden = (_sectionTitle.length == 0);
     [self addSubview:_headerLabel];
 
-    UIView *cardBg = [[UIView alloc] init];
-    cardBg.translatesAutoresizingMaskIntoConstraints = NO;
-    cardBg.backgroundColor = [MiOSTheme cardBackground];
-    cardBg.layer.cornerRadius = [MiOSTheme cardCornerRadius];
-    cardBg.layer.cornerCurve = kCACornerCurveContinuous;
-    cardBg.layer.borderColor = [MiOSTheme separator].CGColor;
-    cardBg.layer.borderWidth = 0.5;
-    [self addSubview:cardBg];
+    _cardBg = [[UIView alloc] init];
+    _cardBg.translatesAutoresizingMaskIntoConstraints = NO;
+    [MiOSTheme applyGlassEffectToView:_cardBg];
+    [self addSubview:_cardBg];
 
     _contentStack = [[UIStackView alloc] init];
     _contentStack.translatesAutoresizingMaskIntoConstraints = NO;
     _contentStack.axis = UILayoutConstraintAxisVertical;
     _contentStack.spacing = 0;
-    [cardBg addSubview:_contentStack];
+    [_cardBg addSubview:_contentStack];
 
     CGFloat headerHeight = _sectionTitle.length > 0 ? 24 : 0;
 
@@ -45,14 +42,14 @@
         [_headerLabel.topAnchor constraintEqualToAnchor:self.topAnchor],
         [_headerLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:20],
         [_headerLabel.heightAnchor constraintEqualToConstant:headerHeight],
-        [cardBg.topAnchor constraintEqualToAnchor:_headerLabel.bottomAnchor constant:_sectionTitle.length > 0 ? 8 : 0],
-        [cardBg.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-        [cardBg.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-        [cardBg.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-        [_contentStack.topAnchor constraintEqualToAnchor:cardBg.topAnchor],
-        [_contentStack.leadingAnchor constraintEqualToAnchor:cardBg.leadingAnchor],
-        [_contentStack.trailingAnchor constraintEqualToAnchor:cardBg.trailingAnchor],
-        [_contentStack.bottomAnchor constraintEqualToAnchor:cardBg.bottomAnchor],
+        [_cardBg.topAnchor constraintEqualToAnchor:_headerLabel.bottomAnchor constant:_sectionTitle.length > 0 ? 8 : 0],
+        [_cardBg.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+        [_cardBg.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+        [_cardBg.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+        [_contentStack.topAnchor constraintEqualToAnchor:_cardBg.topAnchor],
+        [_contentStack.leadingAnchor constraintEqualToAnchor:_cardBg.leadingAnchor],
+        [_contentStack.trailingAnchor constraintEqualToAnchor:_cardBg.trailingAnchor],
+        [_contentStack.bottomAnchor constraintEqualToAnchor:_cardBg.bottomAnchor],
     ]];
 }
 
@@ -72,11 +69,7 @@
 
 - (void)traitCollectionDidChange:(UITraitCollection *)prev {
     [super traitCollectionDidChange:prev];
-    for (UIView *sub in self.subviews) {
-        if ([sub isKindOfClass:[UIView class]] && sub != _headerLabel) {
-            sub.layer.borderColor = [MiOSTheme separator].CGColor;
-        }
-    }
+    _cardBg.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.06].CGColor;
 }
 
 @end

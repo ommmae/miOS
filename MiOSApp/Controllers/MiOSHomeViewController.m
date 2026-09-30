@@ -8,7 +8,13 @@
 #import "../Views/MiOSSectionCardView.h"
 #import "../Views/MiOSToggleCell.h"
 #import "../UI/MiOSTheme.h"
+#import "../Utils/MiOSColorExtractor.h"
 #import <objc/runtime.h>
+#import <QuartzCore/QuartzCore.h>
+
+@interface UIImage (MiOSPrivate)
++ (UIImage *)_applicationIconImageForBundleIdentifier:(NSString *)bundleID format:(int)format scale:(CGFloat)scale;
+@end
 
 static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/MiOS/com.mios.core.plist";
 
@@ -19,6 +25,7 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
 @property (nonatomic, strong) NSMutableDictionary *corePrefs;
 @property (nonatomic, strong) NSArray<MiOSContainerConfig *> *containers;
 @property (nonatomic, copy) NSString *activeContainerID;
+@property (nonatomic, strong) CAGradientLayer *bgGradientLayer;
 @end
 
 @implementation MiOSHomeViewController
@@ -36,6 +43,11 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
     [super viewWillAppear:animated];
     [self loadPreferences];
     [self reloadContainers];
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    _bgGradientLayer.frame = self.view.bounds;
 }
 
 - (void)loadPreferences {
@@ -63,6 +75,17 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
 #pragma mark - UI Setup
 
 - (void)setupUI {
+    // Subtle gradient background
+    _bgGradientLayer = [CAGradientLayer layer];
+    _bgGradientLayer.colors = @[
+        (id)[UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:1.0].CGColor,
+        (id)[MiOSTheme primaryBackground].CGColor,
+    ];
+    _bgGradientLayer.startPoint = CGPointMake(0.5, 0.0);
+    _bgGradientLayer.endPoint = CGPointMake(0.5, 1.0);
+    _bgGradientLayer.frame = self.view.bounds;
+    [self.view.layer insertSublayer:_bgGradientLayer atIndex:0];
+
     _scrollView = [[UIScrollView alloc] init];
     _scrollView.translatesAutoresizingMaskIntoConstraints = NO;
     _scrollView.showsVerticalScrollIndicator = NO;
@@ -171,6 +194,74 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
     [_mainStack addArrangedSubview:emptyCard];
 }
 
+#pragma mark - App Icon Helpers
+
+- (UIImage *)iconForBundleID:(NSString *)bundleID {
+    // Try private API first
+    UIImage *img = [UIImage _applicationIconImageForBundleIdentifier:bundleID format:0 scale:[UIScreen mainScreen].scale];
+    if (img) return img;
+
+    // Fallback: search through MiOSAppInfo
+    NSArray<MiOSAppInfo *> *allApps = [MiOSAppInfo allApps];
+    for (MiOSAppInfo *app in allApps) {
+        if ([app.bundleID isEqualToString:bundleID]) {
+            return app.icon;
+        }
+    }
+    return nil;
+}
+
+- (UIView *)appIconsRowForBundleIDs:(NSArray<NSString *> *)bundleIDs maxIcons:(NSUInteger)maxIcons iconSize:(CGFloat)iconSize {
+    UIStackView *iconsStack = [[UIStackView alloc] init];
+    iconsStack.translatesAutoresizingMaskIntoConstraints = NO;
+    iconsStack.axis = UILayoutConstraintAxisHorizontal;
+    iconsStack.spacing = 6;
+    iconsStack.alignment = UIStackViewAlignmentCenter;
+
+    NSUInteger showCount = MIN(bundleIDs.count, maxIcons);
+    for (NSUInteger i = 0; i < showCount; i++) {
+        NSString *bid = bundleIDs[i];
+        UIImage *appIcon = [self iconForBundleID:bid];
+
+        UIImageView *iconView = [[UIImageView alloc] init];
+        iconView.translatesAutoresizingMaskIntoConstraints = NO;
+        iconView.contentMode = UIViewContentModeScaleAspectFill;
+        iconView.clipsToBounds = YES;
+        iconView.layer.cornerRadius = iconSize * 0.22;
+        iconView.layer.cornerCurve = kCACornerCurveContinuous;
+        iconView.backgroundColor = [[MiOSTheme secondaryBackground] colorWithAlphaComponent:0.5];
+
+        if (appIcon) {
+            iconView.image = appIcon;
+        } else {
+            // Placeholder: SF Symbol for a generic app
+            UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:iconSize * 0.5 weight:UIImageSymbolWeightRegular];
+            iconView.image = [UIImage systemImageNamed:@"app.fill" withConfiguration:cfg];
+            iconView.tintColor = [MiOSTheme tertiaryText];
+            iconView.contentMode = UIViewContentModeCenter;
+        }
+
+        [NSLayoutConstraint activateConstraints:@[
+            [iconView.widthAnchor constraintEqualToConstant:iconSize],
+            [iconView.heightAnchor constraintEqualToConstant:iconSize],
+        ]];
+
+        [iconsStack addArrangedSubview:iconView];
+    }
+
+    // "+N" label if more apps than shown
+    if (bundleIDs.count > maxIcons) {
+        UILabel *moreLabel = [[UILabel alloc] init];
+        moreLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        moreLabel.text = [NSString stringWithFormat:@"+%lu", (unsigned long)(bundleIDs.count - maxIcons)];
+        moreLabel.font = [UIFont systemFontOfSize:(iconSize < 24 ? 10 : 12) weight:UIFontWeightMedium];
+        moreLabel.textColor = [MiOSTheme secondaryText];
+        [iconsStack addArrangedSubview:moreLabel];
+    }
+
+    return iconsStack;
+}
+
 #pragma mark - Active Container Card
 
 - (void)buildActiveContainerCard {
@@ -186,18 +277,27 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
     }
     if (!active) return;
 
+    UIColor *cardAccent = [MiOSTheme accentColor];
+    if (active.apps.count > 0) {
+        UIImage *firstIcon = [self iconForBundleID:active.apps.firstObject];
+        if (firstIcon) {
+            UIColor *extracted = [MiOSColorExtractor vibrantColorFromImage:firstIcon];
+            if (extracted) cardAccent = extracted;
+        }
+    }
+
     UIView *card = [[UIView alloc] init];
     card.translatesAutoresizingMaskIntoConstraints = NO;
     card.backgroundColor = [MiOSTheme cardBackground];
     card.layer.cornerRadius = 20;
     card.layer.cornerCurve = kCACornerCurveContinuous;
     card.layer.borderWidth = 1.5;
-    card.layer.borderColor = [MiOSTheme accentColor].CGColor;
+    card.layer.borderColor = cardAccent.CGColor;
 
     // Active badge
     UIView *badge = [[UIView alloc] init];
     badge.translatesAutoresizingMaskIntoConstraints = NO;
-    badge.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.15];
+    badge.backgroundColor = [cardAccent colorWithAlphaComponent:0.15];
     badge.layer.cornerRadius = 10;
     [card addSubview:badge];
 
@@ -205,7 +305,7 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
     badgeLabel.translatesAutoresizingMaskIntoConstraints = NO;
     badgeLabel.text = @"ACTIVE";
     badgeLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightBold];
-    badgeLabel.textColor = [MiOSTheme accentColor];
+    badgeLabel.textColor = cardAccent;
     [badge addSubview:badgeLabel];
 
     // Container name
@@ -224,6 +324,13 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
     appsLabel.textColor = [MiOSTheme secondaryText];
     [card addSubview:appsLabel];
 
+    // App icons row (up to 5 icons, 28x28)
+    UIView *appIconsRow = nil;
+    if (active.apps.count > 0) {
+        appIconsRow = [self appIconsRowForBundleIDs:active.apps maxIcons:5 iconSize:28];
+        [card addSubview:appIconsRow];
+    }
+
     // Status indicators
     UIStackView *statusStack = [[UIStackView alloc] init];
     statusStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -237,30 +344,94 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
     }
     [card addSubview:statusStack];
 
+    // Device info row (if device spoof enabled)
+    UIView *deviceInfoRow = nil;
+    if (active.deviceSpoofEnabled) {
+        deviceInfoRow = [self buildDeviceInfoRowWithName:active.deviceName iosVersion:active.iosVersion];
+        [card addSubview:deviceInfoRow];
+    }
+
     // Chevron
     UIImageView *chevron = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
     chevron.translatesAutoresizingMaskIntoConstraints = NO;
     chevron.tintColor = [MiOSTheme tertiaryText];
     [card addSubview:chevron];
 
-    [NSLayoutConstraint activateConstraints:@[
+    // Determine the bottom anchor chain
+    // Layout order: badge -> name -> appIcons -> status -> deviceInfo -> bottom
+    UIView *bottomElement = statusStack;
+
+    // Constraints
+    NSMutableArray *constraints = [NSMutableArray array];
+
+    // Badge
+    [constraints addObjectsFromArray:@[
         [badge.topAnchor constraintEqualToAnchor:card.topAnchor constant:16],
         [badge.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
         [badgeLabel.topAnchor constraintEqualToAnchor:badge.topAnchor constant:4],
         [badgeLabel.bottomAnchor constraintEqualToAnchor:badge.bottomAnchor constant:-4],
         [badgeLabel.leadingAnchor constraintEqualToAnchor:badge.leadingAnchor constant:10],
         [badgeLabel.trailingAnchor constraintEqualToAnchor:badge.trailingAnchor constant:-10],
+    ]];
+
+    // Name
+    [constraints addObjectsFromArray:@[
         [nameLabel.topAnchor constraintEqualToAnchor:badge.bottomAnchor constant:10],
         [nameLabel.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
         [nameLabel.trailingAnchor constraintEqualToAnchor:chevron.leadingAnchor constant:-8],
+    ]];
+
+    // Apps count
+    [constraints addObjectsFromArray:@[
         [appsLabel.topAnchor constraintEqualToAnchor:nameLabel.bottomAnchor constant:4],
         [appsLabel.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
-        [statusStack.topAnchor constraintEqualToAnchor:appsLabel.bottomAnchor constant:12],
-        [statusStack.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
-        [statusStack.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-16],
+    ]];
+
+    // App icons row
+    if (appIconsRow) {
+        [constraints addObjectsFromArray:@[
+            [appIconsRow.topAnchor constraintEqualToAnchor:appsLabel.bottomAnchor constant:10],
+            [appIconsRow.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
+        ]];
+        // Status stack anchors below app icons
+        [constraints addObjectsFromArray:@[
+            [statusStack.topAnchor constraintEqualToAnchor:appIconsRow.bottomAnchor constant:10],
+            [statusStack.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
+        ]];
+    } else {
+        // Status stack anchors below apps label
+        [constraints addObjectsFromArray:@[
+            [statusStack.topAnchor constraintEqualToAnchor:appsLabel.bottomAnchor constant:12],
+            [statusStack.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
+        ]];
+    }
+
+    // Device info row
+    if (deviceInfoRow) {
+        [constraints addObjectsFromArray:@[
+            [deviceInfoRow.topAnchor constraintEqualToAnchor:statusStack.bottomAnchor constant:10],
+            [deviceInfoRow.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
+            [deviceInfoRow.trailingAnchor constraintEqualToAnchor:chevron.leadingAnchor constant:-8],
+        ]];
+        bottomElement = deviceInfoRow;
+    }
+
+    // Bottom
+    [constraints addObject:[bottomElement.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-16]];
+
+    // Chevron
+    [constraints addObjectsFromArray:@[
         [chevron.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
         [chevron.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
     ]];
+
+    [NSLayoutConstraint activateConstraints:constraints];
+
+    card.layer.shadowColor = cardAccent.CGColor;
+    card.layer.shadowOffset = CGSizeMake(0, 4);
+    card.layer.shadowRadius = 16;
+    card.layer.shadowOpacity = 0.15;
+    card.clipsToBounds = NO;
 
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(activeContainerTapped:)];
     card.userInteractionEnabled = YES;
@@ -269,6 +440,62 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
     [card addGestureRecognizer:tap];
 
     [_mainStack addArrangedSubview:card];
+}
+
+- (UIView *)buildDeviceInfoRowWithName:(NSString *)deviceName iosVersion:(NSString *)iosVersion {
+    UIStackView *row = [[UIStackView alloc] init];
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+    row.axis = UILayoutConstraintAxisHorizontal;
+    row.spacing = 6;
+    row.alignment = UIStackViewAlignmentCenter;
+
+    // iPhone SF symbol icon
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightMedium];
+    UIImageView *deviceIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"iphone" withConfiguration:cfg]];
+    deviceIcon.translatesAutoresizingMaskIntoConstraints = NO;
+    deviceIcon.tintColor = [UIColor systemTealColor];
+    [row addArrangedSubview:deviceIcon];
+
+    // Device name text
+    UILabel *nameLabel = [[UILabel alloc] init];
+    nameLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    nameLabel.text = deviceName.length > 0 ? deviceName : @"Unknown Device";
+    nameLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+    nameLabel.textColor = [MiOSTheme secondaryText];
+    [nameLabel setContentHuggingPriority:UILayoutPriorityDefaultHigh forAxis:UILayoutConstraintAxisHorizontal];
+    [row addArrangedSubview:nameLabel];
+
+    // iOS version badge pill
+    if (iosVersion.length > 0) {
+        UIView *iosPill = [[UIView alloc] init];
+        iosPill.translatesAutoresizingMaskIntoConstraints = NO;
+        iosPill.backgroundColor = [[UIColor systemTealColor] colorWithAlphaComponent:0.12];
+        iosPill.layer.cornerRadius = 7;
+
+        UILabel *iosLabel = [[UILabel alloc] init];
+        iosLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        iosLabel.text = [NSString stringWithFormat:@"iOS %@", iosVersion];
+        iosLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
+        iosLabel.textColor = [UIColor systemTealColor];
+        [iosPill addSubview:iosLabel];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [iosLabel.topAnchor constraintEqualToAnchor:iosPill.topAnchor constant:3],
+            [iosLabel.bottomAnchor constraintEqualToAnchor:iosPill.bottomAnchor constant:-3],
+            [iosLabel.leadingAnchor constraintEqualToAnchor:iosPill.leadingAnchor constant:7],
+            [iosLabel.trailingAnchor constraintEqualToAnchor:iosPill.trailingAnchor constant:-7],
+        ]];
+
+        [row addArrangedSubview:iosPill];
+    }
+
+    // Spacer to push content to the left
+    UIView *spacer = [[UIView alloc] init];
+    spacer.translatesAutoresizingMaskIntoConstraints = NO;
+    [spacer setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+    [row addArrangedSubview:spacer];
+
+    return row;
 }
 
 - (UIView *)statusPillWithIcon:(NSString *)icon text:(NSString *)text color:(UIColor *)color {
@@ -324,6 +551,16 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
                     color:isActive ? [MiOSTheme accentColor] : [UIColor systemPurpleColor]];
 
         if (isActive) cell.badgeText = @"Active";
+
+        // Add app icons row to the cell (up to 3, small 22x22)
+        if (c.apps.count > 0) {
+            UIView *cellIconsRow = [self appIconsRowForBundleIDs:c.apps maxIcons:3 iconSize:22];
+            [cell addSubview:cellIconsRow];
+            [NSLayoutConstraint activateConstraints:@[
+                [cellIconsRow.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor constant:-32],
+                [cellIconsRow.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
+            ]];
+        }
 
         __weak typeof(self) weakSelf = self;
         NSString *cid = c.identifier;

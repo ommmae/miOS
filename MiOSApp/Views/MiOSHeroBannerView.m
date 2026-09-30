@@ -10,6 +10,7 @@
     UIView *_statusDot;
     UISwitch *_masterToggle;
     UIView *_pixelGrid;
+    UIView *_glowView;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -21,7 +22,7 @@
 
 - (void)setupView {
     self.translatesAutoresizingMaskIntoConstraints = NO;
-    self.layer.cornerRadius = 20;
+    self.layer.cornerRadius = [MiOSTheme cardCornerRadius];
     self.layer.cornerCurve = kCACornerCurveContinuous;
     self.clipsToBounds = YES;
 
@@ -33,7 +34,7 @@
 
     UIView *overlay = [[UIView alloc] init];
     overlay.translatesAutoresizingMaskIntoConstraints = NO;
-    overlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.15];
+    overlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.2];
     [self addSubview:overlay];
 
     _logoLabel = [[UILabel alloc] init];
@@ -70,6 +71,12 @@
     [_masterToggle addTarget:self action:@selector(toggleChanged:) forControlEvents:UIControlEventValueChanged];
     [self addSubview:_masterToggle];
 
+    // Subtle glow behind the banner
+    self.layer.shadowColor = [MiOSTheme accentColor].CGColor;
+    self.layer.shadowOffset = CGSizeMake(0, 6);
+    self.layer.shadowRadius = 20;
+    self.layer.shadowOpacity = 0.2;
+
     [NSLayoutConstraint activateConstraints:@[
         [_gradientContainer.topAnchor constraintEqualToAnchor:self.topAnchor],
         [_gradientContainer.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
@@ -98,7 +105,7 @@
 - (void)buildPixelDecoration {
     _pixelGrid = [[UIView alloc] init];
     _pixelGrid.translatesAutoresizingMaskIntoConstraints = NO;
-    _pixelGrid.alpha = 0.12;
+    _pixelGrid.alpha = 0.10;
     [self addSubview:_pixelGrid];
 
     [NSLayoutConstraint activateConstraints:@[
@@ -136,10 +143,17 @@
     if (!_gradient) {
         _gradient = [CAGradientLayer layer];
         _gradient.frame = _gradientContainer.bounds;
+        UIColor *accent = [MiOSTheme accentColor];
+        UIColor *accentEnd = [MiOSTheme accentGradientEnd];
+        CGFloat r1, g1, b1, a1;
+        [accent getRed:&r1 green:&g1 blue:&b1 alpha:&a1];
+        CGFloat r2, g2, b2, a2;
+        [accentEnd getRed:&r2 green:&g2 blue:&b2 alpha:&a2];
+        UIColor *mid = [UIColor colorWithRed:(r1+r2)*0.5 green:(g1+g2)*0.5 blue:(b1+b2)*0.5 alpha:1.0];
         _gradient.colors = @[
-            (id)[UIColor colorWithRed:0.0 green:0.75 blue:0.95 alpha:1.0].CGColor,
-            (id)[UIColor colorWithRed:0.35 green:0.20 blue:0.95 alpha:1.0].CGColor,
-            (id)[UIColor colorWithRed:0.60 green:0.10 blue:0.80 alpha:1.0].CGColor,
+            (id)accent.CGColor,
+            (id)mid.CGColor,
+            (id)accentEnd.CGColor,
         ];
         _gradient.startPoint = CGPointMake(0, 0);
         _gradient.endPoint = CGPointMake(1, 1);
@@ -153,7 +167,7 @@
     void (^updates)(void) = ^{
         self->_statusLabel.text = enabled ? @"Active" : @"Disabled";
         self->_statusDot.backgroundColor = enabled ? [UIColor systemGreenColor] : [UIColor systemRedColor];
-        self->_gradientContainer.alpha = enabled ? 1.0 : 0.5;
+        self->_gradientContainer.alpha = enabled ? 1.0 : 0.4;
     };
     if (animated) {
         [UIView animateWithDuration:0.3 animations:updates];
