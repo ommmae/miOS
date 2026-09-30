@@ -15,6 +15,7 @@ APPLICATION_NAME = MiOS
 MiOS_FILES = $(wildcard MiOSApp/*.m) $(wildcard MiOSApp/Controllers/*.m) $(wildcard MiOSApp/Views/*.m) $(wildcard MiOSApp/Models/*.m) $(wildcard MiOSApp/Utils/*.m) $(wildcard MiOSApp/UI/*.m)
 MiOS_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
 MiOS_FRAMEWORKS = UIKit Foundation CoreGraphics QuartzCore CoreLocation MapKit
+MiOS_PRIVATE_FRAMEWORKS = MobileCoreServices
 MiOS_INSTALL_PATH = /Applications
 MiOS_CODESIGN_FLAGS = -Sentitlements.plist
 
