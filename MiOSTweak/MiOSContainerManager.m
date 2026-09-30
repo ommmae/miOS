@@ -163,6 +163,20 @@ static NSString *const kMiOSPrefsFile = @"com.mios.containerprefs.plist";
     return error == nil;
 }
 
+- (NSDictionary *)spoofPrefsForBundleID:(NSString *)bundleID {
+    MiOSContainerModel *active = [self activeContainerForBundleID:bundleID];
+    if (!active) return @{};
+    NSString *metaPath;
+    if (active.isDefault) {
+        NSString *appDataPath = [self appDataPathForBundleID:bundleID];
+        if (!appDataPath) return @{};
+        metaPath = [appDataPath stringByAppendingPathComponent:@".mios_spoof_prefs.plist"];
+    } else {
+        metaPath = [active.path stringByAppendingPathComponent:@".mios_spoof_prefs.plist"];
+    }
+    return [NSDictionary dictionaryWithContentsOfFile:metaPath] ?: @{};
+}
+
 - (NSString *)redirectedPathForPath:(NSString *)originalPath bundleID:(NSString *)bundleID {
     MiOSContainerModel *active = [self activeContainerForBundleID:bundleID];
     if (!active || active.isDefault) return originalPath;

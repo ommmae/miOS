@@ -3,20 +3,21 @@
 #import "../Views/MiOSToggleCell.h"
 #import "../UI/MiOSTheme.h"
 #import "../Models/MiOSDeviceDatabase.h"
+#import <objc/runtime.h>
 
 static NSString *const kMiOSContainerDirName = @"___MiOS_Containers";
 static NSString *const kMiOSContainerPrefsPath = @"/var/mobile/Library/Preferences/MiOS/com.mios.containerprefs.plist";
 static NSString *const kDeviceSpoofPrefsPath = @"/var/mobile/Library/Preferences/MiOS/com.mios.devicespoof.plist";
 static NSString *const kLocationPrefsPath = @"/var/mobile/Library/Preferences/MiOS/com.mios.locationprefs.plist";
 
-@interface MiOSContainerDetailViewController () <UITableViewDataSource, UITableViewDelegate>
+@interface MiOSContainerDetailViewController () <MiOSToggleCellDelegate>
 @property (nonatomic, copy) NSString *bundleID;
 @property (nonatomic, copy) NSString *appDataPath;
 @property (nonatomic, strong) UIScrollView *scrollView;
 @property (nonatomic, strong) UIStackView *mainStack;
-@property (nonatomic, strong) UITableView *tableView;
 @property (nonatomic, strong) NSMutableArray *containers;
 @property (nonatomic, copy) NSString *activeContainerID;
+@property (nonatomic, strong) NSMutableDictionary *spoofPrefs;
 @end
 
 @implementation MiOSContainerDetailViewController
@@ -86,9 +87,36 @@ static NSString *const kLocationPrefsPath = @"/var/mobile/Library/Preferences/Mi
         [_mainStack.bottomAnchor constraintEqualToAnchor:_scrollView.bottomAnchor constant:-32],
     ]];
 
+    [self loadSpoofPrefs];
     [self buildDashboardCard];
     [self buildContainerList];
+    [self buildIdentifiersSection];
     [self buildActionsSection];
+}
+
+- (NSString *)spoofPrefsPathForContainerID:(NSString *)containerID {
+    if ([containerID isEqualToString:@"DEFAULT"]) {
+        return [_appDataPath stringByAppendingPathComponent:@".mios_spoof_prefs.plist"];
+    }
+    NSString *containerDir = [_appDataPath stringByAppendingPathComponent:kMiOSContainerDirName];
+    NSString *containerPath = [containerDir stringByAppendingPathComponent:containerID];
+    return [containerPath stringByAppendingPathComponent:@".mios_spoof_prefs.plist"];
+}
+
+- (void)loadSpoofPrefs {
+    NSString *path = [self spoofPrefsPathForContainerID:_activeContainerID];
+    _spoofPrefs = [[NSDictionary dictionaryWithContentsOfFile:path] mutableCopy];
+    if (!_spoofPrefs) _spoofPrefs = [NSMutableDictionary new];
+}
+
+- (void)saveSpoofPrefs {
+    NSString *path = [self spoofPrefsPathForContainerID:_activeContainerID];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = [path stringByDeletingLastPathComponent];
+    if (![fm fileExistsAtPath:dir]) {
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+    [_spoofPrefs writeToFile:path atomically:YES];
 }
 
 - (void)buildDashboardCard {
@@ -325,9 +353,166 @@ static NSString *const kLocationPrefsPath = @"/var/mobile/Library/Preferences/Mi
         [_mainStack removeArrangedSubview:v];
         [v removeFromSuperview];
     }
+    [self loadSpoofPrefs];
     [self buildDashboardCard];
     [self buildContainerList];
+    [self buildIdentifiersSection];
     [self buildActionsSection];
+}
+
+- (void)buildIdentifiersSection {
+    MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@"Privacy & Identifiers"];
+    __weak typeof(self) weakSelf = self;
+
+    MiOSToggleCell *deviceCheckCell = [[MiOSToggleCell alloc]
+        initWithTitle:@"DeviceCheck Bypass"
+             subtitle:@"Block DeviceCheck token generation"
+                 icon:@"checkmark.shield.fill"
+                color:[UIColor systemRedColor]
+                  key:@"spoofDeviceCheck"];
+    deviceCheckCell.isOn = [_spoofPrefs[@"spoofDeviceCheck"] boolValue];
+    deviceCheckCell.delegate = self;
+    [section addCellView:deviceCheckCell];
+    [section addSeparator];
+
+    MiOSToggleCell *vendorCell = [[MiOSToggleCell alloc]
+        initWithTitle:@"Vendor ID Spoof"
+             subtitle:@"Spoof identifierForVendor"
+                 icon:@"person.badge.key.fill"
+                color:[UIColor systemIndigoColor]
+                  key:@"spoofVendorID"];
+    vendorCell.isOn = [_spoofPrefs[@"spoofVendorID"] boolValue];
+    vendorCell.delegate = self;
+    [section addCellView:vendorCell];
+
+    if ([_spoofPrefs[@"spoofVendorID"] boolValue]) {
+        NSString *vid = _spoofPrefs[@"vendorID"] ?: @"Not generated";
+        [section addCellView:[self identifierValueRowWithValue:vid key:@"vendorID" generateAction:^{
+            [weakSelf generateIdentifier:@"vendorID"];
+        }]];
+    }
+    [section addSeparator];
+
+    MiOSToggleCell *adCell = [[MiOSToggleCell alloc]
+        initWithTitle:@"Advertising ID Spoof"
+             subtitle:@"Spoof advertisingIdentifier"
+                 icon:@"megaphone.fill"
+                color:[UIColor systemOrangeColor]
+                  key:@"spoofAdvertisingID"];
+    adCell.isOn = [_spoofPrefs[@"spoofAdvertisingID"] boolValue];
+    adCell.delegate = self;
+    [section addCellView:adCell];
+
+    if ([_spoofPrefs[@"spoofAdvertisingID"] boolValue]) {
+        NSString *aid = _spoofPrefs[@"advertisingID"] ?: @"Not generated";
+        [section addCellView:[self identifierValueRowWithValue:aid key:@"advertisingID" generateAction:^{
+            [weakSelf generateIdentifier:@"advertisingID"];
+        }]];
+    }
+    [section addSeparator];
+
+    MiOSToggleCell *cloudCell = [[MiOSToggleCell alloc]
+        initWithTitle:@"iCloud Token Spoof"
+             subtitle:@"Return nil for ubiquityIdentityToken"
+                 icon:@"icloud.slash.fill"
+                color:[UIColor systemGrayColor]
+                  key:@"spoofCloudToken"];
+    cloudCell.isOn = [_spoofPrefs[@"spoofCloudToken"] boolValue];
+    cloudCell.delegate = self;
+    [section addCellView:cloudCell];
+
+    [_mainStack addArrangedSubview:section];
+}
+
+- (UIView *)identifierValueRowWithValue:(NSString *)value key:(NSString *)key generateAction:(void (^)(void))action {
+    UIView *row = [[UIView alloc] init];
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+
+    UILabel *valueLabel = [[UILabel alloc] init];
+    valueLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    valueLabel.text = value;
+    valueLabel.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
+    valueLabel.textColor = [MiOSTheme secondaryText];
+    valueLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    [row addSubview:valueLabel];
+
+    UIButton *genBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    genBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    [genBtn setTitle:@"Generate" forState:UIControlStateNormal];
+    genBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+    [genBtn setTitleColor:[MiOSTheme accentColor] forState:UIControlStateNormal];
+    genBtn.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.12];
+    genBtn.layer.cornerRadius = 8;
+    genBtn.contentEdgeInsets = UIEdgeInsetsMake(4, 12, 4, 12);
+    [row addSubview:genBtn];
+
+    UIButton *copyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    copyBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightMedium];
+    [copyBtn setImage:[UIImage systemImageNamed:@"doc.on.doc" withConfiguration:cfg] forState:UIControlStateNormal];
+    copyBtn.tintColor = [MiOSTheme secondaryText];
+    [row addSubview:copyBtn];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [row.heightAnchor constraintEqualToConstant:40],
+        [valueLabel.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:64],
+        [valueLabel.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [valueLabel.trailingAnchor constraintLessThanOrEqualToAnchor:copyBtn.leadingAnchor constant:-8],
+        [copyBtn.trailingAnchor constraintEqualToAnchor:genBtn.leadingAnchor constant:-8],
+        [copyBtn.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [copyBtn.widthAnchor constraintEqualToConstant:28],
+        [genBtn.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-16],
+        [genBtn.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+    ]];
+
+    NSString *valueCopy = [value copy];
+    [copyBtn addTarget:self action:@selector(copyValueFromButton:) forControlEvents:UIControlEventTouchUpInside];
+    objc_setAssociatedObject(copyBtn, "copyValue", valueCopy, OBJC_ASSOCIATION_COPY_NONATOMIC);
+
+    [genBtn addTarget:self action:@selector(generateFromButton:) forControlEvents:UIControlEventTouchUpInside];
+    objc_setAssociatedObject(genBtn, "genKey", key, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    objc_setAssociatedObject(genBtn, "genAction", action, OBJC_ASSOCIATION_COPY_NONATOMIC);
+
+    return row;
+}
+
+- (void)copyValueFromButton:(UIButton *)sender {
+    NSString *val = objc_getAssociatedObject(sender, "copyValue");
+    if (val.length > 0 && ![val isEqualToString:@"Not generated"]) {
+        [UIPasteboard generalPasteboard].string = val;
+        UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+        [haptic impactOccurred];
+    }
+}
+
+- (void)generateFromButton:(UIButton *)sender {
+    void (^action)(void) = objc_getAssociatedObject(sender, "genAction");
+    if (action) action();
+}
+
+- (void)generateIdentifier:(NSString *)key {
+    NSString *newUUID = [[NSUUID UUID] UUIDString];
+    _spoofPrefs[key] = newUUID;
+    [self saveSpoofPrefs];
+    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+    [haptic impactOccurred];
+    [self rebuildUI];
+}
+
+#pragma mark - MiOSToggleCellDelegate
+
+- (void)toggleCell:(id)cell didChangeValue:(BOOL)value forKey:(NSString *)key {
+    _spoofPrefs[key] = @(value);
+
+    if ([key isEqualToString:@"spoofVendorID"] && value && !_spoofPrefs[@"vendorID"]) {
+        _spoofPrefs[@"vendorID"] = [[NSUUID UUID] UUIDString];
+    }
+    if ([key isEqualToString:@"spoofAdvertisingID"] && value && !_spoofPrefs[@"advertisingID"]) {
+        _spoofPrefs[@"advertisingID"] = [[NSUUID UUID] UUIDString];
+    }
+
+    [self saveSpoofPrefs];
+    [self rebuildUI];
 }
 
 - (void)buildActionsSection {

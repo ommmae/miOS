@@ -18,4 +18,5 @@
 - (BOOL)deleteContainer:(NSString *)containerID forBundleID:(NSString *)bundleID;
 - (NSString *)redirectedPathForPath:(NSString *)originalPath bundleID:(NSString *)bundleID;
 - (void)setupContainerDirectories:(NSString *)containerPath;
+- (NSDictionary *)spoofPrefsForBundleID:(NSString *)bundleID;
 @end

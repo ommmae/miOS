@@ -10,6 +10,18 @@
 typedef int (*libSandy_applyProfile_t)(const char *profileName);
 typedef CFTypeRef (*MGCopyAnswer_t)(CFStringRef key);
 
+@interface DCDevice : NSObject
+@property (class, readonly) DCDevice *currentDevice;
+@property (nonatomic, readonly, getter=isSupported) BOOL supported;
+- (void)generateTokenWithCompletionHandler:(void (^)(NSData *, NSError *))completion;
+@end
+
+@interface ASIdentifierManager : NSObject
++ (ASIdentifierManager *)sharedManager;
+- (NSUUID *)advertisingIdentifier;
+- (BOOL)isAdvertisingTrackingEnabled;
+@end
+
 static void applySandyProfile(const char *profileName) {
     static libSandy_applyProfile_t fn = NULL;
     static dispatch_once_t onceToken;
@@ -66,6 +78,17 @@ static NSString *spoofedHWModel(void) {
 
 static NSString *spoofedIOSVersion(void) {
     return cachedDeviceSpoofPrefs()[@"iosVersion"] ?: @"";
+}
+
+// MARK: - Per-container spoof prefs (like Ghost)
+
+static NSDictionary *cachedContainerSpoofPrefs(void) {
+    static NSDictionary *prefs = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        prefs = [[MiOSContainerManager sharedManager] spoofPrefsForBundleID:currentBundleID()];
+    });
+    return prefs;
 }
 
 // MARK: - Container Redirect Hooks
@@ -310,7 +333,6 @@ static NSString *spoofedIOSVersion(void) {
 
 %end
 
-// Hook NSProcessInfo for OS version components
 %hook NSProcessInfo
 
 - (NSOperatingSystemVersion)operatingSystemVersion {
@@ -342,6 +364,84 @@ static NSString *spoofedIOSVersion(void) {
 %end
 
 %end // DeviceSpoofHooks
+
+// MARK: - Identifier Spoofing Hooks (per-container, like Ghost)
+
+%group IdentifierSpoofHooks
+
+%hook UIDevice
+
+- (NSUUID *)identifierForVendor {
+    NSDictionary *sp = cachedContainerSpoofPrefs();
+    if ([sp[@"spoofVendorID"] boolValue]) {
+        NSString *vid = sp[@"vendorID"];
+        if (vid.length > 0) {
+            NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:vid];
+            if (uuid) return uuid;
+        }
+    }
+    return %orig;
+}
+
+%end
+
+%hook ASIdentifierManager
+
+- (NSUUID *)advertisingIdentifier {
+    NSDictionary *sp = cachedContainerSpoofPrefs();
+    if ([sp[@"spoofAdvertisingID"] boolValue]) {
+        NSString *aid = sp[@"advertisingID"];
+        if (aid.length > 0) {
+            NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:aid];
+            if (uuid) return uuid;
+        }
+    }
+    return %orig;
+}
+
+- (BOOL)isAdvertisingTrackingEnabled {
+    NSDictionary *sp = cachedContainerSpoofPrefs();
+    if ([sp[@"spoofAdvertisingID"] boolValue]) return NO;
+    return %orig;
+}
+
+%end
+
+%hook DCDevice
+
+- (BOOL)isSupported {
+    NSDictionary *sp = cachedContainerSpoofPrefs();
+    if ([sp[@"spoofDeviceCheck"] boolValue]) return NO;
+    return %orig;
+}
+
+- (void)generateTokenWithCompletionHandler:(void (^)(NSData *, NSError *))completion {
+    NSDictionary *sp = cachedContainerSpoofPrefs();
+    if ([sp[@"spoofDeviceCheck"] boolValue]) {
+        if (completion) {
+            NSError *error = [NSError errorWithDomain:@"DCErrorDomain" code:1 userInfo:@{
+                NSLocalizedDescriptionKey: @"DeviceCheck is not supported on this device"
+            }];
+            completion(nil, error);
+        }
+        return;
+    }
+    %orig;
+}
+
+%end
+
+%hook NSFileManager
+
+- (id)ubiquityIdentityToken {
+    NSDictionary *sp = cachedContainerSpoofPrefs();
+    if ([sp[@"spoofCloudToken"] boolValue]) return nil;
+    return %orig;
+}
+
+%end
+
+%end // IdentifierSpoofHooks
 
 // MARK: - sysctlbyname hook for hw.machine / hw.model
 
@@ -439,6 +539,15 @@ static CFTypeRef hook_MGCopyAnswer(CFStringRef key) {
                     MSHookFunction((void *)mgFn, (void *)hook_MGCopyAnswer, (void **)&orig_MGCopyAnswer);
                 }
             }
+        }
+
+        NSDictionary *containerSpoof = cachedContainerSpoofPrefs();
+        BOOL needIdHooks = [containerSpoof[@"spoofVendorID"] boolValue] ||
+                           [containerSpoof[@"spoofAdvertisingID"] boolValue] ||
+                           [containerSpoof[@"spoofDeviceCheck"] boolValue] ||
+                           [containerSpoof[@"spoofCloudToken"] boolValue];
+        if (needIdHooks) {
+            %init(IdentifierSpoofHooks);
         }
     }
 }
