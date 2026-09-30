@@ -1,8 +1,10 @@
 #import "MiOSHomeViewController.h"
 #import "MiOSGPSViewController.h"
 #import "MiOSContainerListViewController.h"
+#import "MiOSContainerDetailViewController.h"
 #import "MiOSAppListViewController.h"
 #import "MiOSSettingsViewController.h"
+#import "MiOSDeviceSpoofViewController.h"
 #import "../Views/MiOSHeroBannerView.h"
 #import "../Views/MiOSSectionCardView.h"
 #import "../Views/MiOSToggleCell.h"
@@ -37,7 +39,7 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
 - (void)loadPreferences {
     _corePrefs = [[NSMutableDictionary dictionaryWithContentsOfFile:kMiOSCorePrefsPath] mutableCopy];
     if (!_corePrefs) {
-        _corePrefs = [@{@"enabled": @YES, @"mode": @"local"} mutableCopy];
+        _corePrefs = [@{@"enabled": @YES} mutableCopy];
     }
 }
 
@@ -75,8 +77,8 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
     ]];
 
     [self buildHeroBanner];
+    [self buildNewContainerButton];
     [self buildModulesSection];
-    [self buildQuickActionsSection];
     [self buildInfoSection];
 }
 
@@ -89,6 +91,77 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
         [weakSelf savePreferences];
     };
     [_mainStack addArrangedSubview:_heroBanner];
+}
+
+- (void)buildNewContainerButton {
+    UIView *btnContainer = [[UIView alloc] init];
+    btnContainer.translatesAutoresizingMaskIntoConstraints = NO;
+
+    UIView *btn = [[UIView alloc] init];
+    btn.translatesAutoresizingMaskIntoConstraints = NO;
+    btn.backgroundColor = [MiOSTheme accentColor];
+    btn.layer.cornerRadius = 14;
+    btn.layer.cornerCurve = kCACornerCurveContinuous;
+    [btnContainer addSubview:btn];
+
+    UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightSemibold];
+    UIImageView *plusIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"plus" withConfiguration:config]];
+    plusIcon.translatesAutoresizingMaskIntoConstraints = NO;
+    plusIcon.tintColor = [UIColor whiteColor];
+    [btn addSubview:plusIcon];
+
+    UILabel *label = [[UILabel alloc] init];
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    label.text = @"New Container";
+    label.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
+    label.textColor = [UIColor whiteColor];
+    [btn addSubview:label];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [btn.topAnchor constraintEqualToAnchor:btnContainer.topAnchor],
+        [btn.leadingAnchor constraintEqualToAnchor:btnContainer.leadingAnchor],
+        [btn.trailingAnchor constraintEqualToAnchor:btnContainer.trailingAnchor],
+        [btn.bottomAnchor constraintEqualToAnchor:btnContainer.bottomAnchor],
+        [btn.heightAnchor constraintEqualToConstant:50],
+        [plusIcon.leadingAnchor constraintEqualToAnchor:btn.leadingAnchor constant:20],
+        [plusIcon.centerYAnchor constraintEqualToAnchor:btn.centerYAnchor],
+        [label.leadingAnchor constraintEqualToAnchor:plusIcon.trailingAnchor constant:8],
+        [label.centerYAnchor constraintEqualToAnchor:btn.centerYAnchor],
+    ]];
+
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(newContainerTapped:)];
+    [btn addGestureRecognizer:tap];
+    btn.userInteractionEnabled = YES;
+    btn.tag = 100;
+
+    [_mainStack addArrangedSubview:btnContainer];
+}
+
+- (void)newContainerTapped:(UITapGestureRecognizer *)sender {
+    UIView *btn = sender.view;
+    [UIView animateWithDuration:0.08 animations:^{
+        btn.transform = CGAffineTransformMakeScale(0.97, 0.97);
+        btn.alpha = 0.8;
+    } completion:^(BOOL finished) {
+        [UIView animateWithDuration:0.15 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:0 animations:^{
+            btn.transform = CGAffineTransformIdentity;
+            btn.alpha = 1.0;
+        } completion:nil];
+    }];
+
+    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+    [haptic impactOccurred];
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"New Container"
+                                                                  message:@"Select an app first to create a container for it."
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    __weak typeof(self) weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"Choose App" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        MiOSContainerListViewController *vc = [[MiOSContainerListViewController alloc] init];
+        [weakSelf.navigationController pushViewController:vc animated:YES];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)buildModulesSection {
@@ -106,6 +179,18 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
         [weakSelf.navigationController pushViewController:vc animated:YES];
     };
     [section addCellView:gpsCell];
+    [section addSeparator];
+
+    MiOSNavigationCell *deviceCell = [[MiOSNavigationCell alloc]
+        initWithTitle:@"Device Spoof"
+             subtitle:@"Change device model & iOS version"
+                 icon:@"iphone.gen3"
+                color:[UIColor systemTealColor]];
+    deviceCell.tapAction = ^{
+        MiOSDeviceSpoofViewController *vc = [[MiOSDeviceSpoofViewController alloc] init];
+        [weakSelf.navigationController pushViewController:vc animated:YES];
+    };
+    [section addCellView:deviceCell];
     [section addSeparator];
 
     MiOSNavigationCell *containerCell = [[MiOSNavigationCell alloc]
@@ -134,49 +219,6 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
     [_mainStack addArrangedSubview:section];
 }
 
-- (void)buildQuickActionsSection {
-    MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@"Mode"];
-
-    UISegmentedControl *modeSegment = [[UISegmentedControl alloc] initWithItems:@[@"Local", @"Global"]];
-    modeSegment.translatesAutoresizingMaskIntoConstraints = NO;
-    modeSegment.selectedSegmentIndex = [_corePrefs[@"mode"] isEqualToString:@"global"] ? 1 : 0;
-    [modeSegment addTarget:self action:@selector(modeChanged:) forControlEvents:UIControlEventValueChanged];
-
-    UIView *segmentContainer = [[UIView alloc] init];
-    segmentContainer.translatesAutoresizingMaskIntoConstraints = NO;
-    [segmentContainer addSubview:modeSegment];
-
-    [NSLayoutConstraint activateConstraints:@[
-        [modeSegment.topAnchor constraintEqualToAnchor:segmentContainer.topAnchor constant:12],
-        [modeSegment.leadingAnchor constraintEqualToAnchor:segmentContainer.leadingAnchor constant:16],
-        [modeSegment.trailingAnchor constraintEqualToAnchor:segmentContainer.trailingAnchor constant:-16],
-        [modeSegment.bottomAnchor constraintEqualToAnchor:segmentContainer.bottomAnchor constant:-12],
-        [modeSegment.heightAnchor constraintEqualToConstant:36],
-    ]];
-    [section addCellView:segmentContainer];
-    [section addSeparator];
-
-    UILabel *modeDesc = [[UILabel alloc] init];
-    modeDesc.translatesAutoresizingMaskIntoConstraints = NO;
-    modeDesc.font = [MiOSTheme captionFont];
-    modeDesc.textColor = [MiOSTheme secondaryText];
-    modeDesc.numberOfLines = 0;
-    modeDesc.text = @"Local: configure per-app containers with separate data. Global: apply settings to all selected apps.";
-
-    UIView *descContainer = [[UIView alloc] init];
-    descContainer.translatesAutoresizingMaskIntoConstraints = NO;
-    [descContainer addSubview:modeDesc];
-    [NSLayoutConstraint activateConstraints:@[
-        [modeDesc.topAnchor constraintEqualToAnchor:descContainer.topAnchor constant:8],
-        [modeDesc.leadingAnchor constraintEqualToAnchor:descContainer.leadingAnchor constant:16],
-        [modeDesc.trailingAnchor constraintEqualToAnchor:descContainer.trailingAnchor constant:-16],
-        [modeDesc.bottomAnchor constraintEqualToAnchor:descContainer.bottomAnchor constant:-12],
-    ]];
-    [section addCellView:descContainer];
-
-    [_mainStack addArrangedSubview:section];
-}
-
 - (void)buildInfoSection {
     MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@""];
 
@@ -194,13 +236,6 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
     [section addCellView:settingsCell];
 
     [_mainStack addArrangedSubview:section];
-}
-
-- (void)modeChanged:(UISegmentedControl *)sender {
-    _corePrefs[@"mode"] = sender.selectedSegmentIndex == 1 ? @"global" : @"local";
-    [self savePreferences];
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [haptic impactOccurred];
 }
 
 @end

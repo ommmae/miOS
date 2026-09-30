@@ -2,13 +2,18 @@
 #import "../Views/MiOSSectionCardView.h"
 #import "../Views/MiOSToggleCell.h"
 #import "../UI/MiOSTheme.h"
+#import "../Models/MiOSDeviceDatabase.h"
 
 static NSString *const kMiOSContainerDirName = @"___MiOS_Containers";
 static NSString *const kMiOSContainerPrefsPath = @"/var/mobile/Library/Preferences/MiOS/com.mios.containerprefs.plist";
+static NSString *const kDeviceSpoofPrefsPath = @"/var/mobile/Library/Preferences/MiOS/com.mios.devicespoof.plist";
+static NSString *const kLocationPrefsPath = @"/var/mobile/Library/Preferences/MiOS/com.mios.locationprefs.plist";
 
 @interface MiOSContainerDetailViewController () <UITableViewDataSource, UITableViewDelegate>
 @property (nonatomic, copy) NSString *bundleID;
 @property (nonatomic, copy) NSString *appDataPath;
+@property (nonatomic, strong) UIScrollView *scrollView;
+@property (nonatomic, strong) UIStackView *mainStack;
 @property (nonatomic, strong) UITableView *tableView;
 @property (nonatomic, strong) NSMutableArray *containers;
 @property (nonatomic, copy) NSString *activeContainerID;
@@ -53,14 +58,17 @@ static NSString *const kMiOSContainerPrefsPath = @"/var/mobile/Library/Preferenc
 }
 
 - (void)setupUI {
-    _tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped];
-    _tableView.translatesAutoresizingMaskIntoConstraints = NO;
-    _tableView.dataSource = self;
-    _tableView.delegate = self;
-    _tableView.backgroundColor = [UIColor clearColor];
-    _tableView.separatorColor = [MiOSTheme separator];
-    [_tableView registerClass:[UITableViewCell class] forCellReuseIdentifier:@"Cell"];
-    [self.view addSubview:_tableView];
+    _scrollView = [[UIScrollView alloc] init];
+    _scrollView.translatesAutoresizingMaskIntoConstraints = NO;
+    _scrollView.showsVerticalScrollIndicator = NO;
+    _scrollView.alwaysBounceVertical = YES;
+    [self.view addSubview:_scrollView];
+
+    _mainStack = [[UIStackView alloc] init];
+    _mainStack.translatesAutoresizingMaskIntoConstraints = NO;
+    _mainStack.axis = UILayoutConstraintAxisVertical;
+    _mainStack.spacing = 20;
+    [_scrollView addSubview:_mainStack];
 
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
         initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
@@ -68,77 +76,276 @@ static NSString *const kMiOSContainerPrefsPath = @"/var/mobile/Library/Preferenc
                              action:@selector(addContainer)];
 
     [NSLayoutConstraint activateConstraints:@[
-        [_tableView.topAnchor constraintEqualToAnchor:self.view.topAnchor],
-        [_tableView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
-        [_tableView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [_tableView.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [_scrollView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+        [_scrollView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [_scrollView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [_scrollView.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [_mainStack.topAnchor constraintEqualToAnchor:_scrollView.topAnchor constant:16],
+        [_mainStack.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:16],
+        [_mainStack.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-16],
+        [_mainStack.bottomAnchor constraintEqualToAnchor:_scrollView.bottomAnchor constant:-32],
     ]];
+
+    [self buildDashboardCard];
+    [self buildContainerList];
+    [self buildActionsSection];
 }
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 2; }
+- (void)buildDashboardCard {
+    UIView *card = [[UIView alloc] init];
+    card.translatesAutoresizingMaskIntoConstraints = NO;
+    card.layer.cornerRadius = 20;
+    card.layer.cornerCurve = kCACornerCurveContinuous;
+    card.clipsToBounds = YES;
 
-- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    return section == 0 ? @"Containers" : @"Actions";
-}
+    UIView *gradBg = [[UIView alloc] init];
+    gradBg.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:gradBg];
+    [NSLayoutConstraint activateConstraints:@[
+        [gradBg.topAnchor constraintEqualToAnchor:card.topAnchor],
+        [gradBg.leadingAnchor constraintEqualToAnchor:card.leadingAnchor],
+        [gradBg.trailingAnchor constraintEqualToAnchor:card.trailingAnchor],
+        [gradBg.bottomAnchor constraintEqualToAnchor:card.bottomAnchor],
+    ]];
 
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return section == 0 ? _containers.count : 1;
-}
+    CAGradientLayer *gradient = [CAGradientLayer layer];
+    gradient.colors = @[
+        (id)[UIColor colorWithRed:0.10 green:0.10 blue:0.18 alpha:1.0].CGColor,
+        (id)[UIColor colorWithRed:0.08 green:0.08 blue:0.14 alpha:1.0].CGColor,
+    ];
+    gradient.startPoint = CGPointMake(0, 0);
+    gradient.endPoint = CGPointMake(1, 1);
+    [gradBg.layer insertSublayer:gradient atIndex:0];
 
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Cell" forIndexPath:indexPath];
-    cell.backgroundColor = [MiOSTheme cardBackground];
-    cell.textLabel.textColor = [MiOSTheme primaryText];
-    cell.textLabel.font = [MiOSTheme bodyFont];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        gradient.frame = gradBg.bounds;
+    });
+    [gradBg setNeedsLayout];
 
-    if (indexPath.section == 0) {
-        NSDictionary *container = _containers[indexPath.row];
-        cell.textLabel.text = container[@"name"];
-        BOOL isActive = [container[@"id"] isEqualToString:_activeContainerID];
-        cell.accessoryType = isActive ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
-        cell.tintColor = [MiOSTheme accentColor];
+    NSDictionary *devicePrefs = [NSDictionary dictionaryWithContentsOfFile:kDeviceSpoofPrefsPath];
+    NSString *deviceName = devicePrefs[@"deviceName"] ?: @"iPhone";
+    NSString *iosVer = devicePrefs[@"iosVersion"] ?: @"—";
 
-        if (isActive) {
-            UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 8, 8)];
-            dot.backgroundColor = [MiOSTheme success];
-            dot.layer.cornerRadius = 4;
-            cell.imageView.image = [self circleImageWithColor:[MiOSTheme success] size:12];
-        } else {
-            cell.imageView.image = [self circleImageWithColor:[MiOSTheme separator] size:12];
+    NSDictionary *locPrefs = [NSDictionary dictionaryWithContentsOfFile:kLocationPrefsPath];
+    BOOL gpsEnabled = [locPrefs[@"enabled"] boolValue];
+    double lat = [locPrefs[@"latitude"] doubleValue];
+    double lon = [locPrefs[@"longitude"] doubleValue];
+
+    NSDictionary *activeContainer = nil;
+    for (NSDictionary *c in _containers) {
+        if ([c[@"id"] isEqualToString:_activeContainerID]) {
+            activeContainer = c;
+            break;
         }
-    } else {
-        cell.textLabel.text = @"Delete All Containers";
-        cell.textLabel.textColor = [MiOSTheme destructive];
-        cell.imageView.image = nil;
-        cell.accessoryType = UITableViewCellAccessoryNone;
     }
-    return cell;
+
+    UIImageSymbolConfiguration *phoneConfig = [UIImageSymbolConfiguration configurationWithPointSize:80 weight:UIImageSymbolWeightUltraLight];
+    UIImageView *phoneImage = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"iphone" withConfiguration:phoneConfig]];
+    phoneImage.translatesAutoresizingMaskIntoConstraints = NO;
+    phoneImage.tintColor = [UIColor colorWithWhite:1 alpha:0.85];
+    phoneImage.contentMode = UIViewContentModeScaleAspectFit;
+    [card addSubview:phoneImage];
+
+    UILabel *nameLabel = [[UILabel alloc] init];
+    nameLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    nameLabel.text = deviceName;
+    nameLabel.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
+    nameLabel.textColor = [UIColor whiteColor];
+    [card addSubview:nameLabel];
+
+    UIView *enabledBadge = [[UIView alloc] init];
+    enabledBadge.translatesAutoresizingMaskIntoConstraints = NO;
+    enabledBadge.backgroundColor = [[UIColor systemGreenColor] colorWithAlphaComponent:0.2];
+    enabledBadge.layer.cornerRadius = 6;
+    [card addSubview:enabledBadge];
+
+    UILabel *enabledLabel = [[UILabel alloc] init];
+    enabledLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    enabledLabel.text = @"Enabled";
+    enabledLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+    enabledLabel.textColor = [UIColor systemGreenColor];
+    [enabledBadge addSubview:enabledLabel];
+
+    UIStackView *infoStack = [[UIStackView alloc] init];
+    infoStack.translatesAutoresizingMaskIntoConstraints = NO;
+    infoStack.axis = UILayoutConstraintAxisVertical;
+    infoStack.spacing = 6;
+    [card addSubview:infoStack];
+
+    NSString *containerText = activeContainer
+        ? [NSString stringWithFormat:@"Container: %@", activeContainer[@"name"]]
+        : @"Container: Default";
+    [infoStack addArrangedSubview:[self infoRowWithIcon:@"square.stack.3d.up.fill" text:containerText]];
+
+    NSString *iosText = [NSString stringWithFormat:@"iOS %@", iosVer];
+    [infoStack addArrangedSubview:[self infoRowWithIcon:@"gearshape.fill" text:iosText]];
+
+    if (gpsEnabled && (lat != 0 || lon != 0)) {
+        NSString *locText = [NSString stringWithFormat:@"%.4f, %.4f", lat, lon];
+        [infoStack addArrangedSubview:[self infoRowWithIcon:@"location.fill" text:locText]];
+    }
+
+    [NSLayoutConstraint activateConstraints:@[
+        [card.heightAnchor constraintEqualToConstant:180],
+
+        [phoneImage.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
+        [phoneImage.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
+        [phoneImage.widthAnchor constraintEqualToConstant:70],
+        [phoneImage.heightAnchor constraintEqualToConstant:100],
+
+        [nameLabel.topAnchor constraintEqualToAnchor:card.topAnchor constant:24],
+        [nameLabel.leadingAnchor constraintEqualToAnchor:phoneImage.trailingAnchor constant:16],
+        [nameLabel.trailingAnchor constraintLessThanOrEqualToAnchor:card.trailingAnchor constant:-16],
+
+        [enabledBadge.leadingAnchor constraintEqualToAnchor:nameLabel.leadingAnchor],
+        [enabledBadge.topAnchor constraintEqualToAnchor:nameLabel.bottomAnchor constant:6],
+        [enabledLabel.topAnchor constraintEqualToAnchor:enabledBadge.topAnchor constant:3],
+        [enabledLabel.bottomAnchor constraintEqualToAnchor:enabledBadge.bottomAnchor constant:-3],
+        [enabledLabel.leadingAnchor constraintEqualToAnchor:enabledBadge.leadingAnchor constant:8],
+        [enabledLabel.trailingAnchor constraintEqualToAnchor:enabledBadge.trailingAnchor constant:-8],
+
+        [infoStack.leadingAnchor constraintEqualToAnchor:nameLabel.leadingAnchor],
+        [infoStack.trailingAnchor constraintLessThanOrEqualToAnchor:card.trailingAnchor constant:-16],
+        [infoStack.topAnchor constraintEqualToAnchor:enabledBadge.bottomAnchor constant:10],
+    ]];
+
+    [_mainStack addArrangedSubview:card];
 }
 
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+- (UIView *)infoRowWithIcon:(NSString *)iconName text:(NSString *)text {
+    UIView *row = [[UIView alloc] init];
+    row.translatesAutoresizingMaskIntoConstraints = NO;
 
-    if (indexPath.section == 0) {
-        NSDictionary *container = _containers[indexPath.row];
-        _activeContainerID = container[@"id"];
-        [self saveActiveContainer];
-        [_tableView reloadData];
-        UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-        [haptic impactOccurred];
-    } else {
-        [self confirmDeleteAll];
-    }
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:11 weight:UIImageSymbolWeightMedium];
+    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:iconName withConfiguration:cfg]];
+    icon.translatesAutoresizingMaskIntoConstraints = NO;
+    icon.tintColor = [UIColor colorWithWhite:1 alpha:0.5];
+    [row addSubview:icon];
+
+    UILabel *label = [[UILabel alloc] init];
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    label.text = text;
+    label.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+    label.textColor = [UIColor colorWithWhite:1 alpha:0.6];
+    [row addSubview:label];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [icon.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+        [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [icon.widthAnchor constraintEqualToConstant:14],
+        [label.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:6],
+        [label.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+        [label.topAnchor constraintEqualToAnchor:row.topAnchor],
+        [label.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
+        [row.heightAnchor constraintEqualToConstant:18],
+    ]];
+    return row;
 }
 
-- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath {
-    if (indexPath.section != 0 || indexPath.row == 0) return nil;
+- (void)buildContainerList {
+    MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@"Containers"];
 
-    UIContextualAction *del = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive
-        title:@"Delete" handler:^(UIContextualAction *action, UIView *srcView, void (^handler)(BOOL)) {
-            [self deleteContainerAtIndex:indexPath.row];
-            handler(YES);
-        }];
-    return [UISwipeActionsConfiguration configurationWithActions:@[del]];
+    for (NSUInteger i = 0; i < _containers.count; i++) {
+        NSDictionary *container = _containers[i];
+        BOOL isActive = [container[@"id"] isEqualToString:_activeContainerID];
+
+        UIView *cell = [[UIView alloc] init];
+        cell.translatesAutoresizingMaskIntoConstraints = NO;
+        cell.tag = (NSInteger)i;
+        cell.userInteractionEnabled = YES;
+
+        UIView *dot = [[UIView alloc] init];
+        dot.translatesAutoresizingMaskIntoConstraints = NO;
+        dot.backgroundColor = isActive ? [MiOSTheme success] : [MiOSTheme separator];
+        dot.layer.cornerRadius = 5;
+        [cell addSubview:dot];
+
+        UILabel *nameLabel = [[UILabel alloc] init];
+        nameLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        nameLabel.text = container[@"name"];
+        nameLabel.font = [MiOSTheme headlineFont];
+        nameLabel.textColor = [MiOSTheme primaryText];
+        [cell addSubview:nameLabel];
+
+        UIImageView *check = nil;
+        if (isActive) {
+            UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold];
+            check = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"checkmark" withConfiguration:cfg]];
+            check.translatesAutoresizingMaskIntoConstraints = NO;
+            check.tintColor = [MiOSTheme accentColor];
+            [cell addSubview:check];
+        }
+
+        [NSLayoutConstraint activateConstraints:@[
+            [cell.heightAnchor constraintEqualToConstant:48],
+            [dot.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor constant:16],
+            [dot.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
+            [dot.widthAnchor constraintEqualToConstant:10],
+            [dot.heightAnchor constraintEqualToConstant:10],
+            [nameLabel.leadingAnchor constraintEqualToAnchor:dot.trailingAnchor constant:12],
+            [nameLabel.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
+        ]];
+
+        if (check) {
+            [NSLayoutConstraint activateConstraints:@[
+                [check.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor constant:-16],
+                [check.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
+                [nameLabel.trailingAnchor constraintLessThanOrEqualToAnchor:check.leadingAnchor constant:-8],
+            ]];
+        } else {
+            [nameLabel.trailingAnchor constraintLessThanOrEqualToAnchor:cell.trailingAnchor constant:-16].active = YES;
+        }
+
+        UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(containerCellTapped:)];
+        [cell addGestureRecognizer:tap];
+
+        [section addCellView:cell];
+        if (i < _containers.count - 1) [section addSeparator];
+    }
+
+    [_mainStack addArrangedSubview:section];
+}
+
+- (void)containerCellTapped:(UITapGestureRecognizer *)sender {
+    NSInteger idx = sender.view.tag;
+    if (idx < 0 || idx >= (NSInteger)_containers.count) return;
+
+    NSDictionary *container = _containers[idx];
+    _activeContainerID = container[@"id"];
+    [self saveActiveContainer];
+
+    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+    [haptic impactOccurred];
+
+    [self rebuildUI];
+}
+
+- (void)rebuildUI {
+    for (UIView *v in _mainStack.arrangedSubviews) {
+        [_mainStack removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    [self buildDashboardCard];
+    [self buildContainerList];
+    [self buildActionsSection];
+}
+
+- (void)buildActionsSection {
+    MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@""];
+
+    __weak typeof(self) weakSelf = self;
+
+    MiOSNavigationCell *deleteCell = [[MiOSNavigationCell alloc]
+        initWithTitle:@"Delete All Containers"
+             subtitle:nil
+                 icon:@"trash.fill"
+                color:[MiOSTheme destructive]];
+    deleteCell.tapAction = ^{
+        [weakSelf confirmDeleteAll];
+    };
+    [section addCellView:deleteCell];
+
+    [_mainStack addArrangedSubview:section];
 }
 
 - (void)addContainer {
@@ -177,22 +384,7 @@ static NSString *const kMiOSContainerPrefsPath = @"/var/mobile/Library/Preferenc
     [meta writeToFile:metaFile atomically:YES];
 
     [_containers addObject:@{@"id": uuid, @"name": name}];
-    [_tableView reloadData];
-}
-
-- (void)deleteContainerAtIndex:(NSInteger)index {
-    NSDictionary *container = _containers[index];
-    NSString *containerDir = [_appDataPath stringByAppendingPathComponent:kMiOSContainerDirName];
-    NSString *path = [containerDir stringByAppendingPathComponent:container[@"id"]];
-    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
-
-    if ([_activeContainerID isEqualToString:container[@"id"]]) {
-        _activeContainerID = @"DEFAULT";
-        [self saveActiveContainer];
-    }
-
-    [_containers removeObjectAtIndex:index];
-    [_tableView reloadData];
+    [self rebuildUI];
 }
 
 - (void)confirmDeleteAll {
@@ -207,7 +399,7 @@ static NSString *const kMiOSContainerPrefsPath = @"/var/mobile/Library/Preferenc
         weakSelf.activeContainerID = @"DEFAULT";
         [weakSelf saveActiveContainer];
         [weakSelf loadContainers];
-        [weakSelf.tableView reloadData];
+        [weakSelf rebuildUI];
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
@@ -226,16 +418,6 @@ static NSString *const kMiOSContainerPrefsPath = @"/var/mobile/Library/Preferenc
         [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
     }
     [prefs writeToFile:kMiOSContainerPrefsPath atomically:YES];
-}
-
-- (UIImage *)circleImageWithColor:(UIColor *)color size:(CGFloat)size {
-    UIGraphicsBeginImageContextWithOptions(CGSizeMake(size, size), NO, 0);
-    [color setFill];
-    UIBezierPath *path = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(0, 0, size, size)];
-    [path fill];
-    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return img;
 }
 
 @end

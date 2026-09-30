@@ -1,11 +1,14 @@
 #import <Foundation/Foundation.h>
 #import <CoreLocation/CoreLocation.h>
+#import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <dlfcn.h>
+#import <sys/sysctl.h>
 #import "MiOSContainerManager.h"
 #import "MiOSLocationManager.h"
 
 typedef int (*libSandy_applyProfile_t)(const char *profileName);
+typedef CFTypeRef (*MGCopyAnswer_t)(CFStringRef key);
 
 static void applySandyProfile(const char *profileName) {
     static libSandy_applyProfile_t fn = NULL;
@@ -32,6 +35,37 @@ static NSDictionary *appPrefs(void) {
     NSString *bid = currentBundleID();
     NSString *path = [NSString stringWithFormat:@"/var/mobile/Library/Preferences/MiOS/apps/%@.plist", bid];
     return [NSDictionary dictionaryWithContentsOfFile:path] ?: @{};
+}
+
+// MARK: - Device Spoof Data
+
+static NSDictionary *cachedDeviceSpoofPrefs(void) {
+    static NSDictionary *prefs = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        prefs = [NSDictionary dictionaryWithContentsOfFile:@"/var/mobile/Library/Preferences/MiOS/com.mios.devicespoof.plist"] ?: @{};
+    });
+    return prefs;
+}
+
+static BOOL deviceSpoofEnabled(void) {
+    return [cachedDeviceSpoofPrefs()[@"enabled"] boolValue];
+}
+
+static NSString *spoofedDeviceIdentifier(void) {
+    return cachedDeviceSpoofPrefs()[@"deviceIdentifier"] ?: @"";
+}
+
+static NSString *spoofedDeviceName(void) {
+    return cachedDeviceSpoofPrefs()[@"deviceName"] ?: @"";
+}
+
+static NSString *spoofedHWModel(void) {
+    return cachedDeviceSpoofPrefs()[@"hwModel"] ?: @"";
+}
+
+static NSString *spoofedIOSVersion(void) {
+    return cachedDeviceSpoofPrefs()[@"iosVersion"] ?: @"";
 }
 
 // MARK: - Container Redirect Hooks
@@ -248,6 +282,127 @@ static NSDictionary *appPrefs(void) {
 
 %end // LocationHooks
 
+// MARK: - Device Spoofing Hooks (like Ghost)
+
+%group DeviceSpoofHooks
+
+%hook UIDevice
+
+- (NSString *)systemVersion {
+    NSString *ver = spoofedIOSVersion();
+    return ver.length > 0 ? ver : %orig;
+}
+
+- (NSString *)model {
+    if (deviceSpoofEnabled() && spoofedDeviceName().length > 0) return @"iPhone";
+    return %orig;
+}
+
+- (NSString *)localizedModel {
+    if (deviceSpoofEnabled() && spoofedDeviceName().length > 0) return @"iPhone";
+    return %orig;
+}
+
+- (NSString *)name {
+    NSString *name = spoofedDeviceName();
+    return name.length > 0 ? name : %orig;
+}
+
+%end
+
+// Hook NSProcessInfo for OS version components
+%hook NSProcessInfo
+
+- (NSOperatingSystemVersion)operatingSystemVersion {
+    NSString *ver = spoofedIOSVersion();
+    if (ver.length > 0) {
+        NSArray *parts = [ver componentsSeparatedByString:@"."];
+        NSOperatingSystemVersion v;
+        v.majorVersion = parts.count > 0 ? [parts[0] integerValue] : 0;
+        v.minorVersion = parts.count > 1 ? [parts[1] integerValue] : 0;
+        v.patchVersion = parts.count > 2 ? [parts[2] integerValue] : 0;
+        return v;
+    }
+    return %orig;
+}
+
+- (BOOL)isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion)version {
+    NSString *ver = spoofedIOSVersion();
+    if (ver.length > 0) {
+        NSOperatingSystemVersion spoofed = [self operatingSystemVersion];
+        if (spoofed.majorVersion > version.majorVersion) return YES;
+        if (spoofed.majorVersion < version.majorVersion) return NO;
+        if (spoofed.minorVersion > version.minorVersion) return YES;
+        if (spoofed.minorVersion < version.minorVersion) return NO;
+        return spoofed.patchVersion >= version.patchVersion;
+    }
+    return %orig;
+}
+
+%end
+
+%end // DeviceSpoofHooks
+
+// MARK: - sysctlbyname hook for hw.machine / hw.model
+
+static int (*orig_sysctlbyname)(const char *, void *, size_t *, void *, size_t);
+
+static int hook_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    int ret = orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
+    if (ret != 0 || !oldp || !oldlenp || !deviceSpoofEnabled()) return ret;
+
+    if (strcmp(name, "hw.machine") == 0) {
+        NSString *ident = spoofedDeviceIdentifier();
+        if (ident.length > 0) {
+            const char *cstr = [ident UTF8String];
+            size_t len = strlen(cstr) + 1;
+            if (*oldlenp >= len) {
+                memcpy(oldp, cstr, len);
+                *oldlenp = len;
+            }
+        }
+    } else if (strcmp(name, "hw.model") == 0) {
+        NSString *hw = spoofedHWModel();
+        if (hw.length > 0) {
+            const char *cstr = [hw UTF8String];
+            size_t len = strlen(cstr) + 1;
+            if (*oldlenp >= len) {
+                memcpy(oldp, cstr, len);
+                *oldlenp = len;
+            }
+        }
+    }
+    return ret;
+}
+
+// MARK: - MobileGestalt hook
+
+static MGCopyAnswer_t orig_MGCopyAnswer = NULL;
+
+static CFTypeRef hook_MGCopyAnswer(CFStringRef key) {
+    if (deviceSpoofEnabled() && key) {
+        NSString *k = (__bridge NSString *)key;
+
+        if ([k isEqualToString:@"ProductType"] || [k isEqualToString:@"HWModelStr"]) {
+            NSString *ident = spoofedDeviceIdentifier();
+            if (ident.length > 0) return (__bridge_retained CFTypeRef)[ident copy];
+        }
+        if ([k isEqualToString:@"DeviceName"] || [k isEqualToString:@"marketing-name"] || [k isEqualToString:@"UserAssignedDeviceName"]) {
+            NSString *name = spoofedDeviceName();
+            if (name.length > 0) return (__bridge_retained CFTypeRef)[name copy];
+        }
+        if ([k isEqualToString:@"HardwarePlatform"]) {
+            NSString *hw = spoofedHWModel();
+            if (hw.length > 0) return (__bridge_retained CFTypeRef)[hw copy];
+        }
+        if ([k isEqualToString:@"ProductVersion"]) {
+            NSString *ver = spoofedIOSVersion();
+            if (ver.length > 0) return (__bridge_retained CFTypeRef)[ver copy];
+        }
+    }
+    return orig_MGCopyAnswer ? orig_MGCopyAnswer(key) : NULL;
+}
+
 // MARK: - Constructor
 
 %ctor {
@@ -269,6 +424,21 @@ static NSDictionary *appPrefs(void) {
 
         if (locationEnabled) {
             %init(LocationHooks);
+        }
+
+        if (deviceSpoofEnabled()) {
+            %init(DeviceSpoofHooks);
+
+            MSHookFunction((void *)sysctlbyname, (void *)hook_sysctlbyname, (void **)&orig_sysctlbyname);
+
+            void *mgHandle = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
+            if (!mgHandle) mgHandle = dlopen("/var/jb/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
+            if (mgHandle) {
+                MGCopyAnswer_t mgFn = (MGCopyAnswer_t)dlsym(mgHandle, "MGCopyAnswer");
+                if (mgFn) {
+                    MSHookFunction((void *)mgFn, (void *)hook_MGCopyAnswer, (void **)&orig_MGCopyAnswer);
+                }
+            }
         }
     }
 }
