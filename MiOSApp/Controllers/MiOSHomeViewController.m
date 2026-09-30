@@ -152,9 +152,11 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
 - (void)buildEmptyState {
     UIView *emptyCard = [[UIView alloc] init];
     emptyCard.translatesAutoresizingMaskIntoConstraints = NO;
-    emptyCard.backgroundColor = [MiOSTheme cardBackground];
+    emptyCard.backgroundColor = [MiOSTheme accentTintedCardBackground];
     emptyCard.layer.cornerRadius = 20;
     emptyCard.layer.cornerCurve = kCACornerCurveContinuous;
+    emptyCard.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
+    emptyCard.layer.borderWidth = 1.0;
 
     UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:48 weight:UIImageSymbolWeightThin];
     UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"square.stack.3d.up.slash" withConfiguration:cfg]];
@@ -288,17 +290,26 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
 
     UIView *card = [[UIView alloc] init];
     card.translatesAutoresizingMaskIntoConstraints = NO;
-    card.backgroundColor = [MiOSTheme cardBackground];
+    CGFloat cr, cg, cb, ca;
+    [cardAccent getRed:&cr green:&cg blue:&cb alpha:&ca];
+    card.backgroundColor = [UIColor colorWithRed:0.10 + cr * 0.05
+                                           green:0.10 + cg * 0.05
+                                            blue:0.14 + cb * 0.05
+                                           alpha:0.90];
     card.layer.cornerRadius = 20;
     card.layer.cornerCurve = kCACornerCurveContinuous;
-    card.layer.borderWidth = 1.5;
-    card.layer.borderColor = cardAccent.CGColor;
+    card.layer.borderWidth = 1.0;
+    card.layer.borderColor = [cardAccent colorWithAlphaComponent:0.20].CGColor;
 
     // Active badge
     UIView *badge = [[UIView alloc] init];
     badge.translatesAutoresizingMaskIntoConstraints = NO;
-    badge.backgroundColor = [cardAccent colorWithAlphaComponent:0.15];
+    badge.backgroundColor = [cardAccent colorWithAlphaComponent:0.25];
     badge.layer.cornerRadius = 10;
+    badge.layer.shadowColor = cardAccent.CGColor;
+    badge.layer.shadowOffset = CGSizeZero;
+    badge.layer.shadowRadius = 4;
+    badge.layer.shadowOpacity = 0.3;
     [card addSubview:badge];
 
     UILabel *badgeLabel = [[UILabel alloc] init];
@@ -337,10 +348,10 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
     statusStack.axis = UILayoutConstraintAxisHorizontal;
     statusStack.spacing = 8;
 
-    if (active.gpsEnabled) [statusStack addArrangedSubview:[self statusPillWithIcon:@"location.fill" text:@"GPS" color:[UIColor systemBlueColor]]];
-    if (active.deviceSpoofEnabled) [statusStack addArrangedSubview:[self statusPillWithIcon:@"iphone" text:@"Device" color:[UIColor systemTealColor]]];
+    if (active.gpsEnabled) [statusStack addArrangedSubview:[self statusPillWithIcon:@"location.fill" text:@"GPS" color:cardAccent]];
+    if (active.deviceSpoofEnabled) [statusStack addArrangedSubview:[self statusPillWithIcon:@"iphone" text:@"Device" color:cardAccent]];
     if (active.spoofVendorID || active.spoofAdvertisingID || active.spoofDeviceCheck || active.spoofCloudToken) {
-        [statusStack addArrangedSubview:[self statusPillWithIcon:@"shield.fill" text:@"IDs" color:[UIColor systemPurpleColor]]];
+        [statusStack addArrangedSubview:[self statusPillWithIcon:@"shield.fill" text:@"IDs" color:cardAccent]];
     }
     [card addSubview:statusStack];
 
@@ -429,8 +440,8 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
 
     card.layer.shadowColor = cardAccent.CGColor;
     card.layer.shadowOffset = CGSizeMake(0, 4);
-    card.layer.shadowRadius = 16;
-    card.layer.shadowOpacity = 0.15;
+    card.layer.shadowRadius = 20;
+    card.layer.shadowOpacity = 0.20;
     card.clipsToBounds = NO;
 
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(activeContainerTapped:)];
@@ -453,7 +464,7 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
     UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightMedium];
     UIImageView *deviceIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"iphone" withConfiguration:cfg]];
     deviceIcon.translatesAutoresizingMaskIntoConstraints = NO;
-    deviceIcon.tintColor = [UIColor systemTealColor];
+    deviceIcon.tintColor = [MiOSTheme accentColor];
     [row addArrangedSubview:deviceIcon];
 
     // Device name text
@@ -469,14 +480,14 @@ static NSString *const kMiOSCorePrefsPath = @"/var/mobile/Library/Preferences/Mi
     if (iosVersion.length > 0) {
         UIView *iosPill = [[UIView alloc] init];
         iosPill.translatesAutoresizingMaskIntoConstraints = NO;
-        iosPill.backgroundColor = [[UIColor systemTealColor] colorWithAlphaComponent:0.12];
+        iosPill.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.15];
         iosPill.layer.cornerRadius = 7;
 
         UILabel *iosLabel = [[UILabel alloc] init];
         iosLabel.translatesAutoresizingMaskIntoConstraints = NO;
         iosLabel.text = [NSString stringWithFormat:@"iOS %@", iosVersion];
         iosLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
-        iosLabel.textColor = [UIColor systemTealColor];
+        iosLabel.textColor = [MiOSTheme accentColor];
         [iosPill addSubview:iosLabel];
 
         [NSLayoutConstraint activateConstraints:@[

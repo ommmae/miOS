@@ -21,13 +21,13 @@
     _headerLabel.translatesAutoresizingMaskIntoConstraints = NO;
     _headerLabel.text = [_sectionTitle uppercaseString];
     _headerLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
-    _headerLabel.textColor = [MiOSTheme secondaryText];
+    _headerLabel.textColor = [MiOSTheme accentColor];
     _headerLabel.hidden = (_sectionTitle.length == 0);
     [self addSubview:_headerLabel];
 
     _cardBg = [[UIView alloc] init];
     _cardBg.translatesAutoresizingMaskIntoConstraints = NO;
-    [MiOSTheme applyGlassEffectToView:_cardBg];
+    [MiOSTheme applyAccentGlassEffectToView:_cardBg];
     [self addSubview:_cardBg];
 
     _contentStack = [[UIStackView alloc] init];
@@ -69,7 +69,7 @@
 
 - (void)traitCollectionDidChange:(UITraitCollection *)prev {
     [super traitCollectionDidChange:prev];
-    _cardBg.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.06].CGColor;
+    _cardBg.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
 }
 
 @end

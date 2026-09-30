@@ -36,6 +36,10 @@
 + (BOOL)hasDynamicAccent;
 
 + (void)applyGlassEffectToView:(UIView *)view;
++ (void)applyAccentGlassEffectToView:(UIView *)view;
 + (void)applyGlowToView:(UIView *)view color:(UIColor *)color radius:(CGFloat)radius;
+
++ (UIColor *)accentTintedCardBackground;
++ (UIColor *)accentBorderColor;
 
 @end

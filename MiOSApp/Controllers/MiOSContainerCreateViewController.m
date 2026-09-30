@@ -6,6 +6,7 @@
 #import "../Models/MiOSAppInfo.h"
 #import "../Models/MiOSDeviceDatabase.h"
 #import "../Utils/MiOSColorExtractor.h"
+#import "../Utils/MiOSDeviceImageRenderer.h"
 #import <MapKit/MapKit.h>
 #import <CoreLocation/CoreLocation.h>
 #import <objc/runtime.h>
@@ -36,11 +37,11 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 }
 
 - (void)setupCell {
-    self.contentView.backgroundColor = [MiOSTheme cardBackground];
+    self.contentView.backgroundColor = [MiOSTheme accentTintedCardBackground];
     self.contentView.layer.cornerRadius = 14;
     self.contentView.layer.cornerCurve = kCACornerCurveContinuous;
-    self.contentView.layer.borderColor = [MiOSTheme separator].CGColor;
-    self.contentView.layer.borderWidth = 0.5;
+    self.contentView.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
+    self.contentView.layer.borderWidth = 1.0;
     self.contentView.clipsToBounds = YES;
 
     _iconView = [[UIImageView alloc] init];
@@ -97,15 +98,18 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     _checkmark.hidden = !isChecked;
     self.contentView.layer.borderColor = isChecked
         ? [MiOSTheme accentColor].CGColor
-        : [MiOSTheme separator].CGColor;
-    self.contentView.layer.borderWidth = isChecked ? 1.5 : 0.5;
+        : [MiOSTheme accentBorderColor].CGColor;
+    self.contentView.layer.borderWidth = isChecked ? 1.5 : 1.0;
+    self.contentView.backgroundColor = isChecked
+        ? [[MiOSTheme accentColor] colorWithAlphaComponent:0.08]
+        : [MiOSTheme accentTintedCardBackground];
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection *)prev {
     [super traitCollectionDidChange:prev];
     self.contentView.layer.borderColor = _isChecked
         ? [MiOSTheme accentColor].CGColor
-        : [MiOSTheme separator].CGColor;
+        : [MiOSTheme accentBorderColor].CGColor;
 }
 
 @end
@@ -440,7 +444,7 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     UIImageSymbolConfiguration *closeCfg = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightSemibold];
     [closeBtn setImage:[UIImage systemImageNamed:@"xmark" withConfiguration:closeCfg] forState:UIControlStateNormal];
     closeBtn.tintColor = [MiOSTheme secondaryText];
-    closeBtn.backgroundColor = [MiOSTheme cardBackground];
+    closeBtn.backgroundColor = [MiOSTheme accentTintedCardBackground];
     closeBtn.layer.cornerRadius = 16;
     [closeBtn addTarget:self action:@selector(cancelTapped) forControlEvents:UIControlEventTouchUpInside];
     [_step1View addSubview:closeBtn];
@@ -467,11 +471,11 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     _nameField.placeholder = @"Container name...";
     _nameField.font = [MiOSTheme bodyFont];
     _nameField.textColor = [MiOSTheme primaryText];
-    _nameField.backgroundColor = [MiOSTheme cardBackground];
+    _nameField.backgroundColor = [MiOSTheme accentTintedCardBackground];
     _nameField.layer.cornerRadius = 14;
     _nameField.layer.cornerCurve = kCACornerCurveContinuous;
-    _nameField.layer.borderColor = [MiOSTheme separator].CGColor;
-    _nameField.layer.borderWidth = 0.5;
+    _nameField.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
+    _nameField.layer.borderWidth = 1.0;
     _nameField.delegate = self;
     _nameField.returnKeyType = UIReturnKeyDone;
     _nameField.autocorrectionType = UITextAutocorrectionTypeNo;
@@ -508,8 +512,11 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     _appSearchBar.delegate = self;
 
     UITextField *searchField = _appSearchBar.searchTextField;
-    searchField.backgroundColor = [MiOSTheme cardBackground];
+    searchField.backgroundColor = [MiOSTheme accentTintedCardBackground];
     searchField.textColor = [MiOSTheme primaryText];
+    searchField.layer.cornerRadius = 10;
+    searchField.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
+    searchField.layer.borderWidth = 1.0;
     [_step1View addSubview:_appSearchBar];
 
     // Collection view - full width list layout
@@ -699,8 +706,8 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 
     [self buildRandomSetupButton];
     [self buildGPSSection];
-    [self buildDeviceSection];
     [self buildIdentifiersSection];
+    [self buildDeviceSection];
     [self buildSaveButton];
 }
 
@@ -786,8 +793,8 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     }
     [self buildRandomSetupButton];
     [self buildGPSSection];
-    [self buildDeviceSection];
     [self buildIdentifiersSection];
+    [self buildDeviceSection];
     [self buildSaveButton];
 
     // Animate a subtle flash
@@ -1030,11 +1037,11 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     // -- Device display card --
     UIView *deviceCard = [[UIView alloc] init];
     deviceCard.translatesAutoresizingMaskIntoConstraints = NO;
-    deviceCard.backgroundColor = [MiOSTheme secondaryBackground];
+    deviceCard.backgroundColor = [MiOSTheme accentTintedCardBackground];
     deviceCard.layer.cornerRadius = 14;
     deviceCard.layer.cornerCurve = kCACornerCurveContinuous;
-    deviceCard.layer.borderColor = [MiOSTheme separator].CGColor;
-    deviceCard.layer.borderWidth = 0.5;
+    deviceCard.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
+    deviceCard.layer.borderWidth = 1.0;
     [_deviceCardContainer addSubview:deviceCard];
 
     // Device icon (SF Symbol)
@@ -1109,9 +1116,11 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     [chooseBtn setTitle:@"Choose Device" forState:UIControlStateNormal];
     chooseBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
     [chooseBtn setTitleColor:[MiOSTheme accentColor] forState:UIControlStateNormal];
-    chooseBtn.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.12];
-    chooseBtn.layer.cornerRadius = 10;
+    chooseBtn.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.15];
+    chooseBtn.layer.cornerRadius = 12;
     chooseBtn.layer.cornerCurve = kCACornerCurveContinuous;
+    chooseBtn.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
+    chooseBtn.layer.borderWidth = 1.0;
     chooseBtn.contentEdgeInsets = UIEdgeInsetsMake(8, 16, 8, 16);
     [chooseBtn addTarget:self action:@selector(chooseDeviceTapped) forControlEvents:UIControlEventTouchUpInside];
     [_deviceNavContainer addSubview:chooseBtn];
@@ -1184,11 +1193,11 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     _iosVersionButton.translatesAutoresizingMaskIntoConstraints = NO;
     _iosVersionButton.titleLabel.font = [MiOSTheme bodyFont];
     [_iosVersionButton setTitleColor:[MiOSTheme primaryText] forState:UIControlStateNormal];
-    _iosVersionButton.backgroundColor = [MiOSTheme secondaryBackground];
+    _iosVersionButton.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.08];
     _iosVersionButton.layer.cornerRadius = 10;
     _iosVersionButton.layer.cornerCurve = kCACornerCurveContinuous;
-    _iosVersionButton.layer.borderColor = [MiOSTheme separator].CGColor;
-    _iosVersionButton.layer.borderWidth = 0.5;
+    _iosVersionButton.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
+    _iosVersionButton.layer.borderWidth = 1.0;
     _iosVersionButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
     _iosVersionButton.contentEdgeInsets = UIEdgeInsetsMake(0, 14, 0, 14);
     UIImageSymbolConfiguration *chevCfg = [UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightMedium];
@@ -1261,10 +1270,10 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 
     MiOSDeviceModel *device = _deviceList[_selectedDeviceIndex];
 
-    // Icon
-    NSString *sfSymbol = device.sfSymbol.length > 0 ? device.sfSymbol : @"iphone";
-    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:60 weight:UIImageSymbolWeightLight];
-    _deviceIconView.image = [UIImage systemImageNamed:sfSymbol withConfiguration:cfg];
+    // Rendered device image
+    _deviceIconView.image = [MiOSDeviceImageRenderer renderDeviceForName:device.displayName
+                                                                    size:CGSizeMake(70, 80)
+                                                             accentColor:[MiOSTheme accentColor]];
 
     // Name and identifier
     _deviceNameLabel.text = device.displayName;
@@ -1439,7 +1448,7 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 #pragma mark - Identifiers Section
 
 - (void)buildIdentifiersSection {
-    MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@"Privacy & Identifiers"];
+    MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@"Identity & Privacy"];
 
     // DeviceCheck
     MiOSToggleCell *deviceCheckCell = [[MiOSToggleCell alloc]
@@ -1659,11 +1668,11 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     field.placeholder = placeholder;
     field.font = [MiOSTheme bodyFont];
     field.textColor = [MiOSTheme primaryText];
-    field.backgroundColor = [MiOSTheme secondaryBackground];
+    field.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.06];
     field.layer.cornerRadius = 10;
     field.layer.cornerCurve = kCACornerCurveContinuous;
-    field.layer.borderColor = [MiOSTheme separator].CGColor;
-    field.layer.borderWidth = 0.5;
+    field.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
+    field.layer.borderWidth = 1.0;
     field.keyboardType = type;
     field.delegate = self;
     field.returnKeyType = UIReturnKeyDone;

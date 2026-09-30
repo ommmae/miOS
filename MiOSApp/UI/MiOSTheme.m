@@ -171,11 +171,45 @@ static UIColor *_dynamicAccentEnd = nil;
     view.clipsToBounds = NO;
 }
 
++ (void)applyAccentGlassEffectToView:(UIView *)view {
+    UIColor *accent = [self accentColor];
+    CGFloat r, g, b, a;
+    [accent getRed:&r green:&g blue:&b alpha:&a];
+    view.backgroundColor = [UIColor colorWithRed:0.10 + r * 0.03
+                                           green:0.10 + g * 0.03
+                                            blue:0.14 + b * 0.03
+                                           alpha:0.85];
+    view.layer.cornerRadius = [self cardCornerRadius];
+    view.layer.cornerCurve = kCACornerCurveContinuous;
+    view.layer.borderColor = [accent colorWithAlphaComponent:0.15].CGColor;
+    view.layer.borderWidth = 1.0;
+
+    view.layer.shadowColor = accent.CGColor;
+    view.layer.shadowOffset = CGSizeMake(0, 2);
+    view.layer.shadowRadius = 12;
+    view.layer.shadowOpacity = 0.08;
+    view.clipsToBounds = NO;
+}
+
 + (void)applyGlowToView:(UIView *)view color:(UIColor *)color radius:(CGFloat)radius {
     view.layer.shadowColor = color.CGColor;
     view.layer.shadowOffset = CGSizeZero;
     view.layer.shadowRadius = radius;
     view.layer.shadowOpacity = 0.5;
+}
+
++ (UIColor *)accentTintedCardBackground {
+    UIColor *accent = [self accentColor];
+    CGFloat r, g, b, a;
+    [accent getRed:&r green:&g blue:&b alpha:&a];
+    return [UIColor colorWithRed:0.10 + r * 0.04
+                           green:0.10 + g * 0.04
+                            blue:0.14 + b * 0.04
+                           alpha:0.85];
+}
+
++ (UIColor *)accentBorderColor {
+    return [[self accentColor] colorWithAlphaComponent:0.15];
 }
 
 @end

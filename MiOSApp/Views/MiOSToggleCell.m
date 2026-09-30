@@ -28,9 +28,12 @@
 
     _iconContainer = [[UIView alloc] init];
     _iconContainer.translatesAutoresizingMaskIntoConstraints = NO;
-    _iconContainer.backgroundColor = [_iconColor colorWithAlphaComponent:0.15];
-    _iconContainer.layer.cornerRadius = 10;
-    _iconContainer.layer.cornerCurve = kCACornerCurveContinuous;
+    _iconContainer.backgroundColor = [_iconColor colorWithAlphaComponent:0.18];
+    _iconContainer.layer.cornerRadius = 18;
+    _iconContainer.layer.shadowColor = _iconColor.CGColor;
+    _iconContainer.layer.shadowOffset = CGSizeZero;
+    _iconContainer.layer.shadowRadius = 6;
+    _iconContainer.layer.shadowOpacity = 0.2;
     [self addSubview:_iconContainer];
 
     UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightMedium];
@@ -58,7 +61,7 @@
 
     _toggle = [[UISwitch alloc] init];
     _toggle.translatesAutoresizingMaskIntoConstraints = NO;
-    _toggle.onTintColor = _iconColor;
+    _toggle.onTintColor = [MiOSTheme accentColor];
     _toggle.on = _isOn;
     [_toggle addTarget:self action:@selector(toggleChanged:) forControlEvents:UIControlEventValueChanged];
     [self addSubview:_toggle];
@@ -134,9 +137,12 @@
 
     _iconContainer = [[UIView alloc] init];
     _iconContainer.translatesAutoresizingMaskIntoConstraints = NO;
-    _iconContainer.backgroundColor = [_iconColor colorWithAlphaComponent:0.15];
-    _iconContainer.layer.cornerRadius = 10;
-    _iconContainer.layer.cornerCurve = kCACornerCurveContinuous;
+    _iconContainer.backgroundColor = [_iconColor colorWithAlphaComponent:0.18];
+    _iconContainer.layer.cornerRadius = 18;
+    _iconContainer.layer.shadowColor = _iconColor.CGColor;
+    _iconContainer.layer.shadowOffset = CGSizeZero;
+    _iconContainer.layer.shadowRadius = 6;
+    _iconContainer.layer.shadowOpacity = 0.2;
     [self addSubview:_iconContainer];
 
     UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightMedium];
