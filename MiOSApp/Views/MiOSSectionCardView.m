@@ -64,7 +64,7 @@
     sep.backgroundColor = [MiOSTheme separator];
     [_contentStack addArrangedSubview:sep];
     [sep.heightAnchor constraintEqualToConstant:0.5].active = YES;
-    [sep.leadingAnchor constraintEqualToAnchor:_contentStack.leadingAnchor constant:64].active = YES;
+    [sep.leadingAnchor constraintEqualToAnchor:_contentStack.leadingAnchor constant:54].active = YES;
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection *)prev {

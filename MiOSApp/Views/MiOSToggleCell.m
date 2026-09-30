@@ -29,7 +29,7 @@
     _iconContainer = [[UIView alloc] init];
     _iconContainer.translatesAutoresizingMaskIntoConstraints = NO;
     _iconContainer.backgroundColor = [_iconColor colorWithAlphaComponent:0.18];
-    _iconContainer.layer.cornerRadius = 18;
+    _iconContainer.layer.cornerRadius = 16;
     _iconContainer.layer.shadowColor = _iconColor.CGColor;
     _iconContainer.layer.shadowOffset = CGSizeZero;
     _iconContainer.layer.shadowRadius = 6;
@@ -67,20 +67,20 @@
     [self addSubview:_toggle];
 
     [NSLayoutConstraint activateConstraints:@[
-        [_iconContainer.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
+        [_iconContainer.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:12],
         [_iconContainer.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-        [_iconContainer.widthAnchor constraintEqualToConstant:36],
-        [_iconContainer.heightAnchor constraintEqualToConstant:36],
+        [_iconContainer.widthAnchor constraintEqualToConstant:32],
+        [_iconContainer.heightAnchor constraintEqualToConstant:32],
         [_iconView.centerXAnchor constraintEqualToAnchor:_iconContainer.centerXAnchor],
         [_iconView.centerYAnchor constraintEqualToAnchor:_iconContainer.centerYAnchor],
-        [_titleLabel.leadingAnchor constraintEqualToAnchor:_iconContainer.trailingAnchor constant:12],
-        [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_toggle.leadingAnchor constant:-12],
+        [_titleLabel.leadingAnchor constraintEqualToAnchor:_iconContainer.trailingAnchor constant:10],
+        [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_toggle.leadingAnchor constant:-8],
         [_subtitleLabel.leadingAnchor constraintEqualToAnchor:_titleLabel.leadingAnchor],
         [_subtitleLabel.trailingAnchor constraintEqualToAnchor:_titleLabel.trailingAnchor],
         [_subtitleLabel.topAnchor constraintEqualToAnchor:_titleLabel.bottomAnchor constant:2],
-        [_toggle.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
+        [_toggle.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-12],
         [_toggle.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-        [self.heightAnchor constraintGreaterThanOrEqualToConstant:56],
+        [self.heightAnchor constraintGreaterThanOrEqualToConstant:52],
     ]];
 
     if (_subtitle.length > 0) {
@@ -138,7 +138,7 @@
     _iconContainer = [[UIView alloc] init];
     _iconContainer.translatesAutoresizingMaskIntoConstraints = NO;
     _iconContainer.backgroundColor = [_iconColor colorWithAlphaComponent:0.18];
-    _iconContainer.layer.cornerRadius = 18;
+    _iconContainer.layer.cornerRadius = 16;
     _iconContainer.layer.shadowColor = _iconColor.CGColor;
     _iconContainer.layer.shadowOffset = CGSizeZero;
     _iconContainer.layer.shadowRadius = 6;
@@ -189,24 +189,24 @@
     [self addGestureRecognizer:tap];
 
     [NSLayoutConstraint activateConstraints:@[
-        [_iconContainer.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
+        [_iconContainer.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:12],
         [_iconContainer.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-        [_iconContainer.widthAnchor constraintEqualToConstant:36],
-        [_iconContainer.heightAnchor constraintEqualToConstant:36],
+        [_iconContainer.widthAnchor constraintEqualToConstant:32],
+        [_iconContainer.heightAnchor constraintEqualToConstant:32],
         [_iconView.centerXAnchor constraintEqualToAnchor:_iconContainer.centerXAnchor],
         [_iconView.centerYAnchor constraintEqualToAnchor:_iconContainer.centerYAnchor],
-        [_titleLabel.leadingAnchor constraintEqualToAnchor:_iconContainer.trailingAnchor constant:12],
-        [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_chevron.leadingAnchor constant:-12],
+        [_titleLabel.leadingAnchor constraintEqualToAnchor:_iconContainer.trailingAnchor constant:10],
+        [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_chevron.leadingAnchor constant:-8],
         [_subtitleLabel.leadingAnchor constraintEqualToAnchor:_titleLabel.leadingAnchor],
         [_subtitleLabel.trailingAnchor constraintEqualToAnchor:_titleLabel.trailingAnchor],
         [_subtitleLabel.topAnchor constraintEqualToAnchor:_titleLabel.bottomAnchor constant:2],
-        [_chevron.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
+        [_chevron.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-12],
         [_chevron.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
         [_badgeLabel.trailingAnchor constraintEqualToAnchor:_chevron.leadingAnchor constant:-8],
         [_badgeLabel.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
         [_badgeLabel.widthAnchor constraintGreaterThanOrEqualToConstant:20],
         [_badgeLabel.heightAnchor constraintEqualToConstant:20],
-        [self.heightAnchor constraintGreaterThanOrEqualToConstant:56],
+        [self.heightAnchor constraintGreaterThanOrEqualToConstant:52],
     ]];
 
     if (_subtitle.length > 0) {

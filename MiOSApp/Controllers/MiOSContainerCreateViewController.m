@@ -1079,10 +1079,10 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
         [deviceCard.leadingAnchor constraintEqualToAnchor:_deviceCardContainer.leadingAnchor constant:12],
         [deviceCard.trailingAnchor constraintEqualToAnchor:_deviceCardContainer.trailingAnchor constant:-12],
 
-        [_deviceIconView.leadingAnchor constraintEqualToAnchor:deviceCard.leadingAnchor constant:16],
+        [_deviceIconView.leadingAnchor constraintEqualToAnchor:deviceCard.leadingAnchor constant:12],
         [_deviceIconView.centerYAnchor constraintEqualToAnchor:deviceCard.centerYAnchor],
-        [_deviceIconView.widthAnchor constraintEqualToConstant:70],
-        [_deviceIconView.heightAnchor constraintEqualToConstant:80],
+        [_deviceIconView.widthAnchor constraintEqualToConstant:80],
+        [_deviceIconView.heightAnchor constraintEqualToConstant:100],
 
         [_deviceNameLabel.topAnchor constraintEqualToAnchor:deviceCard.topAnchor constant:16],
         [_deviceNameLabel.leadingAnchor constraintEqualToAnchor:_deviceIconView.trailingAnchor constant:16],
@@ -1272,7 +1272,7 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 
     // Rendered device image
     _deviceIconView.image = [MiOSDeviceImageRenderer renderDeviceForName:device.displayName
-                                                                    size:CGSizeMake(70, 80)
+                                                                    size:CGSizeMake(80, 100)
                                                              accentColor:[MiOSTheme accentColor]];
 
     // Name and identifier
