@@ -30,6 +30,10 @@
 + (void)saveAll:(NSArray<MiOSContainerConfig *> *)containers;
 + (NSString *)activeContainerID;
 + (void)setActiveContainerID:(NSString *)containerID;
+// The container marked active, falling back to the first one.
++ (MiOSContainerConfig *)activeContainer;
+// Deletes the container from the saved list and the system (mappings + data); picks a new active one if needed.
++ (void)removeContainerWithID:(NSString *)containerID;
 - (NSDictionary *)toDictionary;
 - (instancetype)initWithDictionary:(NSDictionary *)dict;
 - (void)applyToSystem;

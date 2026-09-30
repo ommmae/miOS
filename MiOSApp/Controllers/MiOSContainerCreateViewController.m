@@ -1,115 +1,110 @@
 #import "MiOSContainerCreateViewController.h"
 #import "../Models/MiOSContainerConfig.h"
-#import "../Views/MiOSSectionCardView.h"
-#import "../Views/MiOSToggleCell.h"
-#import "../UI/MiOSTheme.h"
 #import "../Models/MiOSAppInfo.h"
 #import "../Models/MiOSDeviceDatabase.h"
-#import "../Utils/MiOSColorExtractor.h"
+#import "../Views/MiOSSectionCardView.h"
+#import "../Views/MiOSToggleCell.h"
+#import "../Views/MiOSGradientView.h"
+#import "../Views/MiOSPrimaryButton.h"
+#import "../UI/MiOSTheme.h"
+#import "../Utils/MiOSAppIconProvider.h"
 #import "../Utils/MiOSDeviceImageRenderer.h"
 #import <MapKit/MapKit.h>
 #import <CoreLocation/CoreLocation.h>
-#import <objc/runtime.h>
 
-@interface UIImage (MiOSPrivate)
-+ (UIImage *)_applicationIconImageForBundleIdentifier:(NSString *)bundleID format:(int)format scale:(CGFloat)scale;
-@end
+static UIColor *MiOSMix(UIColor *base, UIColor *overlay, CGFloat t) {
+    CGFloat r1, g1, b1, a1, r2, g2, b2, a2;
+    [base getRed:&r1 green:&g1 blue:&b1 alpha:&a1];
+    [overlay getRed:&r2 green:&g2 blue:&b2 alpha:&a2];
+    return [UIColor colorWithRed:r1 + (r2 - r1) * t green:g1 + (g2 - g1) * t blue:b1 + (b2 - b1) * t alpha:a1];
+}
 
-#pragma mark - App List Cell (Full-Width Row)
+#pragma mark - App Row Cell
 
-static NSString *const kAppCellReuseID = @"MiOSAppListCell";
+static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
 
-@interface MiOSAppListCell : UICollectionViewCell
+@interface MiOSAppRowCell : UICollectionViewCell
 @property (nonatomic, strong) UIImageView *iconView;
 @property (nonatomic, strong) UILabel *nameLabel;
 @property (nonatomic, strong) UILabel *bundleLabel;
-@property (nonatomic, strong) UIImageView *checkmark;
-@property (nonatomic, assign) BOOL isChecked;
+- (void)setChecked:(BOOL)checked;
 @end
 
-@implementation MiOSAppListCell
+@implementation MiOSAppRowCell {
+    UIView *_checkCircle;
+    UIImageView *_checkMark;
+}
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if (self = [super initWithFrame:frame]) {
-        [self setupCell];
+        UIView *card = self.contentView;
+        card.layer.cornerRadius = 20;
+        card.layer.cornerCurve = kCACornerCurveContinuous;
+
+        _iconView = [[UIImageView alloc] init];
+        _iconView.translatesAutoresizingMaskIntoConstraints = NO;
+        _iconView.contentMode = UIViewContentModeScaleAspectFill;
+        _iconView.clipsToBounds = YES;
+        _iconView.layer.cornerRadius = 12;
+        _iconView.layer.cornerCurve = kCACornerCurveContinuous;
+        [card addSubview:_iconView];
+
+        _nameLabel = [[UILabel alloc] init];
+        _nameLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        _nameLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
+        _nameLabel.textColor = [MiOSTheme primaryText];
+        [card addSubview:_nameLabel];
+
+        _bundleLabel = [[UILabel alloc] init];
+        _bundleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        _bundleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+        _bundleLabel.textColor = [MiOSTheme secondaryText];
+        [card addSubview:_bundleLabel];
+
+        _checkCircle = [[UIView alloc] init];
+        _checkCircle.translatesAutoresizingMaskIntoConstraints = NO;
+        _checkCircle.layer.cornerRadius = 13;
+        _checkCircle.layer.borderWidth = 1.5;
+        [card addSubview:_checkCircle];
+
+        UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightBold];
+        _checkMark = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"checkmark" withConfiguration:cfg]];
+        _checkMark.translatesAutoresizingMaskIntoConstraints = NO;
+        _checkMark.contentMode = UIViewContentModeCenter;
+        [_checkCircle addSubview:_checkMark];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [_iconView.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:12],
+            [_iconView.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
+            [_iconView.widthAnchor constraintEqualToConstant:46],
+            [_iconView.heightAnchor constraintEqualToConstant:46],
+            [_nameLabel.leadingAnchor constraintEqualToAnchor:_iconView.trailingAnchor constant:12],
+            [_nameLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_checkCircle.leadingAnchor constant:-10],
+            [_nameLabel.bottomAnchor constraintEqualToAnchor:card.centerYAnchor constant:-1],
+            [_bundleLabel.leadingAnchor constraintEqualToAnchor:_nameLabel.leadingAnchor],
+            [_bundleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_checkCircle.leadingAnchor constant:-10],
+            [_bundleLabel.topAnchor constraintEqualToAnchor:card.centerYAnchor constant:2],
+            [_checkCircle.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
+            [_checkCircle.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
+            [_checkCircle.widthAnchor constraintEqualToConstant:26],
+            [_checkCircle.heightAnchor constraintEqualToConstant:26],
+            [_checkMark.centerXAnchor constraintEqualToAnchor:_checkCircle.centerXAnchor],
+            [_checkMark.centerYAnchor constraintEqualToAnchor:_checkCircle.centerYAnchor],
+        ]];
     }
     return self;
 }
 
-- (void)setupCell {
-    self.contentView.backgroundColor = [MiOSTheme accentTintedCardBackground];
-    self.contentView.layer.cornerRadius = 14;
-    self.contentView.layer.cornerCurve = kCACornerCurveContinuous;
-    self.contentView.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
-    self.contentView.layer.borderWidth = 1.0;
-    self.contentView.clipsToBounds = YES;
-
-    _iconView = [[UIImageView alloc] init];
-    _iconView.translatesAutoresizingMaskIntoConstraints = NO;
-    _iconView.contentMode = UIViewContentModeScaleAspectFill;
-    _iconView.clipsToBounds = YES;
-    _iconView.layer.cornerRadius = 10;
-    _iconView.layer.cornerCurve = kCACornerCurveContinuous;
-    [self.contentView addSubview:_iconView];
-
-    UIStackView *textStack = [[UIStackView alloc] init];
-    textStack.translatesAutoresizingMaskIntoConstraints = NO;
-    textStack.axis = UILayoutConstraintAxisVertical;
-    textStack.spacing = 2;
-
-    _nameLabel = [[UILabel alloc] init];
-    _nameLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _nameLabel.font = [MiOSTheme headlineFont];
-    _nameLabel.textColor = [MiOSTheme primaryText];
-    _nameLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-    [textStack addArrangedSubview:_nameLabel];
-
-    _bundleLabel = [[UILabel alloc] init];
-    _bundleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _bundleLabel.font = [MiOSTheme captionFont];
-    _bundleLabel.textColor = [MiOSTheme secondaryText];
-    _bundleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-    [textStack addArrangedSubview:_bundleLabel];
-
-    [self.contentView addSubview:textStack];
-
-    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightMedium];
-    _checkmark = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:cfg]];
-    _checkmark.translatesAutoresizingMaskIntoConstraints = NO;
-    _checkmark.tintColor = [MiOSTheme accentColor];
-    _checkmark.hidden = YES;
-    [self.contentView addSubview:_checkmark];
-
-    [NSLayoutConstraint activateConstraints:@[
-        [_iconView.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:12],
-        [_iconView.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
-        [_iconView.widthAnchor constraintEqualToConstant:48],
-        [_iconView.heightAnchor constraintEqualToConstant:48],
-        [textStack.leadingAnchor constraintEqualToAnchor:_iconView.trailingAnchor constant:12],
-        [textStack.trailingAnchor constraintEqualToAnchor:_checkmark.leadingAnchor constant:-8],
-        [textStack.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
-        [_checkmark.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-14],
-        [_checkmark.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
-    ]];
-}
-
-- (void)setIsChecked:(BOOL)isChecked {
-    _isChecked = isChecked;
-    _checkmark.hidden = !isChecked;
-    self.contentView.layer.borderColor = isChecked
-        ? [MiOSTheme accentColor].CGColor
-        : [MiOSTheme accentBorderColor].CGColor;
-    self.contentView.layer.borderWidth = isChecked ? 1.5 : 1.0;
-    self.contentView.backgroundColor = isChecked
-        ? [[MiOSTheme accentColor] colorWithAlphaComponent:0.08]
-        : [MiOSTheme accentTintedCardBackground];
-}
-
-- (void)traitCollectionDidChange:(UITraitCollection *)prev {
-    [super traitCollectionDidChange:prev];
-    self.contentView.layer.borderColor = _isChecked
-        ? [MiOSTheme accentColor].CGColor
-        : [MiOSTheme accentBorderColor].CGColor;
+- (void)setChecked:(BOOL)checked {
+    UIColor *accent = [MiOSTheme accentColor];
+    UIView *card = self.contentView;
+    card.backgroundColor = checked ? MiOSMix([MiOSTheme tileBackground], accent, 0.16) : [MiOSTheme tileBackground];
+    card.layer.borderWidth = checked ? 1.5 : 1.0;
+    card.layer.borderColor = checked ? [accent colorWithAlphaComponent:0.8].CGColor : [MiOSTheme hairline].CGColor;
+    _checkCircle.backgroundColor = checked ? accent : [UIColor clearColor];
+    _checkCircle.layer.borderColor = checked ? accent.CGColor : [UIColor colorWithWhite:1 alpha:0.25].CGColor;
+    _checkMark.hidden = !checked;
+    _checkMark.tintColor = [MiOSTheme textColorOnAccent];
 }
 
 @end
@@ -121,26 +116,25 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     MiOSToggleCellDelegate, MKMapViewDelegate, MKLocalSearchCompleterDelegate,
     UITableViewDataSource, UITableViewDelegate>
 
-// Step views
 @property (nonatomic, strong) UIView *step1View;
 @property (nonatomic, strong) UIView *step2View;
 @property (nonatomic, assign) NSInteger currentStep;
-@property (nonatomic, strong) CAGradientLayer *bgGradientLayer;
+@property (nonatomic, strong) CAGradientLayer *bgLayer;
+@property (nonatomic, strong) MiOSGradientView *glowView;
 
 // Step 1 - App Selection
 @property (nonatomic, strong) UITextField *nameField;
 @property (nonatomic, strong) UISegmentedControl *segmentedControl;
-@property (nonatomic, strong) UISearchBar *appSearchBar;
+@property (nonatomic, strong) UITextField *searchField;
 @property (nonatomic, strong) UICollectionView *collectionView;
-@property (nonatomic, strong) UIButton *nextButton;
+@property (nonatomic, strong) MiOSPrimaryButton *nextButton;
 @property (nonatomic, strong) NSArray<MiOSAppInfo *> *allAppsList;
 @property (nonatomic, strong) NSArray<MiOSAppInfo *> *filteredApps;
-@property (nonatomic, strong) NSMutableSet<NSString *> *selectedBundleIDs;
+@property (nonatomic, strong) NSMutableArray<NSString *> *selectedBundleIDs;
 
 // Step 2 - Configuration
 @property (nonatomic, strong) UIScrollView *step2Scroll;
 @property (nonatomic, strong) UIStackView *step2Stack;
-@property (nonatomic, strong) UIButton *randomSetupButton;
 
 // GPS
 @property (nonatomic, assign) BOOL gpsEnabled;
@@ -159,13 +153,16 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 // Device spoof
 @property (nonatomic, assign) BOOL deviceSpoofEnabled;
 @property (nonatomic, strong) UIView *deviceCardContainer;
-@property (nonatomic, strong) UIImageView *deviceIconView;
-@property (nonatomic, strong) UILabel *deviceNameLabel;
-@property (nonatomic, strong) UILabel *deviceIdentifierLabel;
-@property (nonatomic, strong) UILabel *deviceSpecsLabel;
-@property (nonatomic, strong) UIView *storagePillContainer;
-@property (nonatomic, strong) UIButton *iosVersionButton;
-@property (nonatomic, strong) UIView *deviceNavContainer;
+@property (nonatomic, strong) UIImageView *deviceImageView;
+@property (nonatomic, strong) UILabel *deviceNameValue;
+@property (nonatomic, strong) UILabel *deviceIdentifierValue;
+@property (nonatomic, strong) UILabel *deviceChipValue;
+@property (nonatomic, strong) UILabel *deviceMemoryValue;
+@property (nonatomic, strong) UILabel *iosTitleLabel;
+@property (nonatomic, strong) UILabel *iosBadgeLabel;
+@property (nonatomic, strong) UILabel *storageTitleLabel;
+@property (nonatomic, strong) UIView *iosTile;
+@property (nonatomic, strong) UIView *storageTile;
 @property (nonatomic, strong) NSArray<MiOSDeviceModel *> *deviceList;
 @property (nonatomic, strong) NSArray<NSString *> *iosVersionList;
 @property (nonatomic, assign) NSInteger selectedDeviceIndex;
@@ -174,7 +171,7 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 @property (nonatomic, assign) BOOL spoofDeviceName;
 @property (nonatomic, strong) UIView *customDeviceNameContainer;
 @property (nonatomic, strong) UITextField *customDeviceNameField;
-@property (nonatomic, strong) MiOSToggleCell *deviceNameToggle;
+@property (nonatomic, copy) NSString *customDeviceNameText;
 
 // Identifiers
 @property (nonatomic, assign) BOOL spoofDeviceCheck;
@@ -197,43 +194,55 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [MiOSTheme primaryBackground];
-    self.modalPresentationStyle = UIModalPresentationPageSheet;
 
-    [self addBackgroundGradient];
+    _bgLayer = [MiOSTheme pageBackgroundLayer];
+    [self.view.layer insertSublayer:_bgLayer atIndex:0];
+
+    _glowView = [[MiOSGradientView alloc] init];
+    _glowView.translatesAutoresizingMaskIntoConstraints = NO;
+    _glowView.userInteractionEnabled = NO;
+    _glowView.gradientLayer.type = kCAGradientLayerRadial;
+    [self.view addSubview:_glowView];
+    [NSLayoutConstraint activateConstraints:@[
+        [_glowView.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+        [_glowView.centerYAnchor constraintEqualToAnchor:self.view.topAnchor constant:30],
+        [_glowView.widthAnchor constraintEqualToConstant:520],
+        [_glowView.heightAnchor constraintEqualToConstant:420],
+    ]];
 
     _currentStep = 1;
-    _selectedBundleIDs = [NSMutableSet set];
+    _selectedBundleIDs = [NSMutableArray array];
     _deviceList = [MiOSDeviceDatabase allDevices];
     _iosVersionList = [MiOSDeviceDatabase allIOSVersions];
-    _selectedDeviceIndex = 0;
-    _selectedIOSIndex = 0;
-    _selectedStorageIndex = 0;
     _locationSearchResults = @[];
 
     [self setupSearchCompleter];
-    [self loadApps];
     [self prefillFromEditing];
+    [self loadApps];
+    if (_selectedBundleIDs.count > 0) [MiOSAppIconProvider applyThemeForBundleIDs:_selectedBundleIDs];
+    [self updateGlow];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(themeDidChange)
+                                                 name:MiOSThemeDidChangeNotification object:nil];
+
     [self buildStep1];
     [self buildStep2];
-    [self showStep:1 animated:NO];
+    [self showStep:(_entry == MiOSEditorEntrySpoofing ? 2 : 1) animated:NO];
 }
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
-    _bgGradientLayer.frame = self.view.bounds;
+    _bgLayer.frame = self.view.bounds;
 }
 
-- (void)addBackgroundGradient {
-    _bgGradientLayer = [CAGradientLayer layer];
-    UIColor *base = [MiOSTheme primaryBackground];
-    CGFloat r, g, b, a;
-    [base getRed:&r green:&g blue:&b alpha:&a];
-    UIColor *lighter = [UIColor colorWithRed:MIN(r + 0.03, 1.0) green:MIN(g + 0.03, 1.0) blue:MIN(b + 0.03, 1.0) alpha:a];
-    _bgGradientLayer.colors = @[(id)lighter.CGColor, (id)base.CGColor];
-    _bgGradientLayer.startPoint = CGPointMake(0.5, 0);
-    _bgGradientLayer.endPoint = CGPointMake(0.5, 1);
-    _bgGradientLayer.frame = self.view.bounds;
-    [self.view.layer insertSublayer:_bgGradientLayer atIndex:0];
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    if (self.isBeingDismissed || !self.presentingViewController) {
+        [MiOSAppIconProvider applyThemeForActiveContainer];
+    }
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)setupSearchCompleter {
@@ -245,8 +254,8 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 - (void)prefillFromEditing {
     if (!_editingContainer) return;
 
-    if (_editingContainer.apps) {
-        [_selectedBundleIDs addObjectsFromArray:_editingContainer.apps];
+    for (NSString *bundleID in _editingContainer.apps) {
+        if (![_selectedBundleIDs containsObject:bundleID]) [_selectedBundleIDs addObject:bundleID];
     }
     _gpsEnabled = _editingContainer.gpsEnabled;
     _selectedLatitude = _editingContainer.latitude;
@@ -254,15 +263,15 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     _selectedLocationName = _editingContainer.locationName;
     _deviceSpoofEnabled = _editingContainer.deviceSpoofEnabled;
     _spoofDeviceName = _editingContainer.spoofDeviceName;
+    _customDeviceNameText = _editingContainer.customDeviceName;
     _spoofDeviceCheck = _editingContainer.spoofDeviceCheck;
     _spoofVendorID = _editingContainer.spoofVendorID;
-    _vendorID = _editingContainer.vendorID;
+    _vendorID = _editingContainer.vendorID.length > 0 ? _editingContainer.vendorID : nil;
     _spoofAdvertisingID = _editingContainer.spoofAdvertisingID;
-    _advertisingID = _editingContainer.advertisingID;
+    _advertisingID = _editingContainer.advertisingID.length > 0 ? _editingContainer.advertisingID : nil;
     _spoofCloudToken = _editingContainer.spoofCloudToken;
 
-    // Find device index
-    if (_editingContainer.deviceIdentifier) {
+    if (_editingContainer.deviceIdentifier.length > 0) {
         for (NSInteger i = 0; i < (NSInteger)_deviceList.count; i++) {
             if ([_deviceList[i].identifier isEqualToString:_editingContainer.deviceIdentifier]) {
                 _selectedDeviceIndex = i;
@@ -270,22 +279,17 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
             }
         }
         [self updateIOSVersionsForDeviceQuiet];
-        if (_editingContainer.iosVersion) {
-            for (NSInteger i = 0; i < (NSInteger)_iosVersionList.count; i++) {
-                if ([_iosVersionList[i] isEqualToString:_editingContainer.iosVersion]) {
-                    _selectedIOSIndex = i;
-                    break;
-                }
+        for (NSInteger i = 0; i < (NSInteger)_iosVersionList.count; i++) {
+            if ([_iosVersionList[i] isEqualToString:_editingContainer.iosVersion]) {
+                _selectedIOSIndex = i;
+                break;
             }
         }
-        // Find storage index
-        if (_editingContainer.storageSizeGB > 0 && _selectedDeviceIndex < (NSInteger)_deviceList.count) {
-            MiOSDeviceModel *device = _deviceList[_selectedDeviceIndex];
-            for (NSInteger i = 0; i < (NSInteger)device.storageOptions.count; i++) {
-                if (device.storageOptions[i].integerValue == _editingContainer.storageSizeGB) {
-                    _selectedStorageIndex = i;
-                    break;
-                }
+        MiOSDeviceModel *device = _deviceList[_selectedDeviceIndex];
+        for (NSInteger i = 0; i < (NSInteger)device.storageOptions.count; i++) {
+            if (device.storageOptions[i].integerValue == _editingContainer.storageSizeGB) {
+                _selectedStorageIndex = i;
+                break;
             }
         }
     }
@@ -294,37 +298,113 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 - (void)loadApps {
     _allAppsList = [MiOSAppInfo allApps];
     [self filterApps];
-    [self updateDynamicAccentFromSelection];
 }
 
 - (void)filterApps {
-    NSString *searchText = _appSearchBar.text.lowercaseString ?: @"";
+    NSString *searchText = _searchField.text.lowercaseString ?: @"";
     NSInteger segment = _segmentedControl ? _segmentedControl.selectedSegmentIndex : 0;
 
     NSMutableArray<MiOSAppInfo *> *result = [NSMutableArray array];
     for (MiOSAppInfo *app in _allAppsList) {
-        // Segment filter
-        if (segment == 0) {
-            if ([app.bundleID hasPrefix:@"com.apple."]) continue;
-        } else if (segment == 1) {
-            if (![app.bundleID hasPrefix:@"com.apple."]) continue;
-        }
-        // segment == 2 => All
-
-        // Search filter
+        BOOL isSystem = [app.bundleID hasPrefix:@"com.apple."];
+        if (segment == 0 && isSystem) continue;
+        if (segment == 1 && !isSystem) continue;
         if (searchText.length > 0) {
             NSString *nameLower = app.name.lowercaseString ?: @"";
             NSString *bundleLower = app.bundleID.lowercaseString ?: @"";
-            if (![nameLower containsString:searchText] && ![bundleLower containsString:searchText]) {
-                continue;
-            }
+            if (![nameLower containsString:searchText] && ![bundleLower containsString:searchText]) continue;
         }
-
         [result addObject:app];
     }
-
     _filteredApps = [result copy];
     [_collectionView reloadData];
+}
+
+#pragma mark - Theme
+
+- (void)updateGlow {
+    UIColor *accent = [MiOSTheme accentColor];
+    [_glowView setColors:@[[accent colorWithAlphaComponent:0.30], [accent colorWithAlphaComponent:0.0]]
+                   start:CGPointMake(0.5, 0.5) end:CGPointMake(1.0, 1.0)];
+}
+
+- (void)themeDidChange {
+    UIColor *accent = [MiOSTheme accentColor];
+    [UIView transitionWithView:self.view duration:0.3 options:UIViewAnimationOptionTransitionCrossDissolve | UIViewAnimationOptionAllowUserInteraction animations:^{
+        [self updateGlow];
+        self.segmentedControl.selectedSegmentTintColor = accent;
+        [self.segmentedControl setTitleTextAttributes:@{NSForegroundColorAttributeName: [MiOSTheme textColorOnAccent],
+                                                        NSFontAttributeName: [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold]}
+                                             forState:UIControlStateSelected];
+        [(UIImageView *)[self.nameField.leftView viewWithTag:77] setTintColor:accent];
+        self.nameField.tintColor = accent;
+        self.searchField.tintColor = accent;
+        [self.nextButton refreshTheme];
+        for (NSIndexPath *ip in self.collectionView.indexPathsForVisibleItems) {
+            MiOSAppRowCell *cell = (MiOSAppRowCell *)[self.collectionView cellForItemAtIndexPath:ip];
+            [cell setChecked:[self.selectedBundleIDs containsObject:self.filteredApps[ip.item].bundleID]];
+        }
+    } completion:nil];
+}
+
+#pragma mark - Shared UI helpers
+
+- (UIButton *)circleButtonWithSymbol:(NSString *)symbol action:(SEL)action {
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
+    btn.translatesAutoresizingMaskIntoConstraints = NO;
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold];
+    [btn setImage:[UIImage systemImageNamed:symbol withConfiguration:cfg] forState:UIControlStateNormal];
+    btn.tintColor = [MiOSTheme primaryText];
+    btn.backgroundColor = [MiOSTheme tileBackground];
+    btn.layer.cornerRadius = 20;
+    btn.layer.borderWidth = 1.0;
+    btn.layer.borderColor = [MiOSTheme hairline].CGColor;
+    [btn addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    [NSLayoutConstraint activateConstraints:@[
+        [btn.widthAnchor constraintEqualToConstant:40],
+        [btn.heightAnchor constraintEqualToConstant:40],
+    ]];
+    return btn;
+}
+
+- (UITextField *)pillFieldWithPlaceholder:(NSString *)placeholder icon:(NSString *)icon {
+    UITextField *field = [[UITextField alloc] init];
+    field.translatesAutoresizingMaskIntoConstraints = NO;
+    field.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+    field.textColor = [MiOSTheme primaryText];
+    field.attributedPlaceholder = [[NSAttributedString alloc] initWithString:placeholder
+        attributes:@{NSForegroundColorAttributeName: [MiOSTheme tertiaryText]}];
+    field.backgroundColor = [MiOSTheme tileBackground];
+    field.layer.cornerRadius = 18;
+    field.layer.cornerCurve = kCACornerCurveContinuous;
+    field.layer.borderWidth = 1.0;
+    field.layer.borderColor = [MiOSTheme hairline].CGColor;
+    field.tintColor = [MiOSTheme accentColor];
+    field.delegate = self;
+    field.returnKeyType = UIReturnKeyDone;
+    field.autocorrectionType = UITextAutocorrectionTypeNo;
+
+    UIView *left = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 44, 44)];
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold];
+    UIImageView *iv = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:icon withConfiguration:cfg]];
+    iv.frame = CGRectMake(14, 12, 20, 20);
+    iv.contentMode = UIViewContentModeCenter;
+    iv.tintColor = [MiOSTheme secondaryText];
+    iv.tag = 77;
+    [left addSubview:iv];
+    field.leftView = left;
+    field.leftViewMode = UITextFieldViewModeAlways;
+    field.rightView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 14, 44)];
+    field.rightViewMode = UITextFieldViewModeUnlessEditing;
+    return field;
+}
+
+- (UILabel *)labelWithFont:(UIFont *)font color:(UIColor *)color {
+    UILabel *label = [[UILabel alloc] init];
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    label.font = font;
+    label.textColor = color;
+    return label;
 }
 
 #pragma mark - Step Navigation
@@ -343,31 +423,42 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
         return;
     }
 
+    CGFloat width = self.view.bounds.size.width;
     incoming.hidden = NO;
     incoming.alpha = 0;
-    incoming.transform = CGAffineTransformMakeTranslation(forward ? self.view.bounds.size.width : -self.view.bounds.size.width, 0);
-
-    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0.5 options:UIViewAnimationOptionCurveEaseInOut animations:^{
+    incoming.transform = CGAffineTransformMakeTranslation(forward ? width : -width, 0);
+    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0.5 options:0 animations:^{
         incoming.alpha = 1;
         incoming.transform = CGAffineTransformIdentity;
         outgoing.alpha = 0;
-        outgoing.transform = CGAffineTransformMakeTranslation(forward ? -self.view.bounds.size.width : self.view.bounds.size.width, 0);
+        outgoing.transform = CGAffineTransformMakeTranslation(forward ? -width : width, 0);
     } completion:^(BOOL finished) {
         outgoing.hidden = YES;
+        outgoing.transform = CGAffineTransformIdentity;
     }];
 }
 
-- (void)nextTapped {
+- (BOOL)validateStep1 {
     NSString *name = [_nameField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (name.length == 0) {
         [self shakeView:_nameField];
-        return;
+        return NO;
     }
     if (_selectedBundleIDs.count == 0) {
         [self showValidationAlert:@"Please select at least one app."];
+        return NO;
+    }
+    return YES;
+}
+
+- (void)primaryStep1Tapped {
+    if (![self validateStep1]) return;
+    [self.view endEditing:YES];
+    if (_entry == MiOSEditorEntryApps) {
+        [self saveTapped];
         return;
     }
-    [self.view endEditing:YES];
+    [self buildStep2];
     [self showStep:2 animated:YES];
 }
 
@@ -382,46 +473,17 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 
 - (void)shakeView:(UIView *)view {
     CAKeyframeAnimation *anim = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
-    anim.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear];
     anim.duration = 0.4;
     anim.values = @[@(-10), @(10), @(-8), @(8), @(-4), @(4), @(0)];
     [view.layer addAnimation:anim forKey:@"shake"];
+    [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeError];
 }
 
 - (void)showValidationAlert:(NSString *)message {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Missing Info"
-                                                                  message:message
-                                                           preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Missing Info" message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
-}
-
-#pragma mark - Gradient Button Helper
-
-- (void)applyGradientToButton:(UIButton *)button {
-    button.clipsToBounds = YES;
-    // Remove any existing gradient sublayers
-    NSArray *sublayers = [button.layer.sublayers copy];
-    for (CALayer *layer in sublayers) {
-        if ([layer isKindOfClass:[CAGradientLayer class]]) {
-            [layer removeFromSuperlayer];
-        }
-    }
-    dispatch_async(dispatch_get_main_queue(), ^{
-        CGRect btnBounds = button.bounds;
-        if (btnBounds.size.width < 1) {
-            btnBounds = CGRectMake(0, 0, self.view.bounds.size.width - 32, button.bounds.size.height > 0 ? button.bounds.size.height : 50);
-        }
-        CAGradientLayer *grad = [MiOSTheme accentGradientForBounds:btnBounds];
-        grad.cornerRadius = button.layer.cornerRadius;
-        [button.layer insertSublayer:grad atIndex:0];
-    });
-
-    // Shadow
-    button.layer.shadowColor = [MiOSTheme accentColor].CGColor;
-    button.layer.shadowOpacity = 0.25;
-    button.layer.shadowOffset = CGSizeMake(0, 4);
-    button.layer.shadowRadius = 8;
 }
 
 #pragma mark - Build Step 1
@@ -430,7 +492,6 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     _step1View = [[UIView alloc] init];
     _step1View.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:_step1View];
-
     [NSLayoutConstraint activateConstraints:@[
         [_step1View.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
         [_step1View.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
@@ -438,203 +499,112 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
         [_step1View.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
     ]];
 
-    // Close button
-    UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    closeBtn.translatesAutoresizingMaskIntoConstraints = NO;
-    UIImageSymbolConfiguration *closeCfg = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightSemibold];
-    [closeBtn setImage:[UIImage systemImageNamed:@"xmark" withConfiguration:closeCfg] forState:UIControlStateNormal];
-    closeBtn.tintColor = [MiOSTheme secondaryText];
-    closeBtn.backgroundColor = [MiOSTheme accentTintedCardBackground];
-    closeBtn.layer.cornerRadius = 16;
-    [closeBtn addTarget:self action:@selector(cancelTapped) forControlEvents:UIControlEventTouchUpInside];
+    UIButton *closeBtn = [self circleButtonWithSymbol:@"xmark" action:@selector(cancelTapped)];
     [_step1View addSubview:closeBtn];
 
-    // Title
-    UILabel *titleLabel = [[UILabel alloc] init];
-    titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    titleLabel.text = _editingContainer ? @"Edit Container" : @"New Container";
-    titleLabel.font = [MiOSTheme titleFont];
-    titleLabel.textColor = [MiOSTheme primaryText];
+    UILabel *titleLabel = [self labelWithFont:[UIFont systemFontOfSize:30 weight:UIFontWeightBold] color:[MiOSTheme primaryText]];
+    titleLabel.text = _entry == MiOSEditorEntryApps ? @"Apps" : (_editingContainer ? @"Edit Container" : @"New Container");
     [_step1View addSubview:titleLabel];
 
-    // Step indicator
-    UILabel *stepLabel = [[UILabel alloc] init];
-    stepLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    stepLabel.text = @"Step 1 of 2 - Select Apps";
-    stepLabel.font = [MiOSTheme captionFont];
-    stepLabel.textColor = [MiOSTheme tertiaryText];
+    UILabel *stepLabel = [self labelWithFont:[UIFont systemFontOfSize:13 weight:UIFontWeightMedium] color:[MiOSTheme secondaryText]];
+    stepLabel.text = _entry == MiOSEditorEntryApps ? @"Choose the apps inside this container" : @"Step 1 of 2 · Select apps";
     [_step1View addSubview:stepLabel];
 
-    // Name field
-    _nameField = [[UITextField alloc] init];
-    _nameField.translatesAutoresizingMaskIntoConstraints = NO;
-    _nameField.placeholder = @"Container name...";
-    _nameField.font = [MiOSTheme bodyFont];
-    _nameField.textColor = [MiOSTheme primaryText];
-    _nameField.backgroundColor = [MiOSTheme accentTintedCardBackground];
-    _nameField.layer.cornerRadius = 14;
-    _nameField.layer.cornerCurve = kCACornerCurveContinuous;
-    _nameField.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
-    _nameField.layer.borderWidth = 1.0;
-    _nameField.delegate = self;
-    _nameField.returnKeyType = UIReturnKeyDone;
-    _nameField.autocorrectionType = UITextAutocorrectionTypeNo;
-
-    UIView *leftPad = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 16, 48)];
-    _nameField.leftView = leftPad;
-    _nameField.leftViewMode = UITextFieldViewModeAlways;
-    UIView *rightPad = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 16, 48)];
-    _nameField.rightView = rightPad;
-    _nameField.rightViewMode = UITextFieldViewModeAlways;
-
-    if (_editingContainer) {
-        _nameField.text = _editingContainer.name;
-    }
+    _nameField = [self pillFieldWithPlaceholder:@"Container name" icon:@"square.stack.3d.up.fill"];
+    [(UIImageView *)[_nameField.leftView viewWithTag:77] setTintColor:[MiOSTheme accentColor]];
+    _nameField.text = _editingContainer.name;
     [_step1View addSubview:_nameField];
 
-    // Segmented control
-    _segmentedControl = [[UISegmentedControl alloc] initWithItems:@[@"User Apps", @"System Apps", @"All"]];
+    _segmentedControl = [[UISegmentedControl alloc] initWithItems:@[@"User Apps", @"System", @"All"]];
     _segmentedControl.translatesAutoresizingMaskIntoConstraints = NO;
     _segmentedControl.selectedSegmentIndex = 0;
+    _segmentedControl.backgroundColor = [MiOSTheme tileBackground];
     _segmentedControl.selectedSegmentTintColor = [MiOSTheme accentColor];
-    [_segmentedControl setTitleTextAttributes:@{NSForegroundColorAttributeName: [UIColor whiteColor]} forState:UIControlStateSelected];
-    [_segmentedControl setTitleTextAttributes:@{NSForegroundColorAttributeName: [MiOSTheme secondaryText]} forState:UIControlStateNormal];
-    [_segmentedControl addTarget:self action:@selector(segmentChanged) forControlEvents:UIControlEventValueChanged];
+    [_segmentedControl setTitleTextAttributes:@{NSForegroundColorAttributeName: [MiOSTheme textColorOnAccent],
+                                                NSFontAttributeName: [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold]}
+                                     forState:UIControlStateSelected];
+    [_segmentedControl setTitleTextAttributes:@{NSForegroundColorAttributeName: [MiOSTheme secondaryText],
+                                                NSFontAttributeName: [UIFont systemFontOfSize:13 weight:UIFontWeightMedium]}
+                                     forState:UIControlStateNormal];
+    [_segmentedControl addTarget:self action:@selector(filterApps) forControlEvents:UIControlEventValueChanged];
     [_step1View addSubview:_segmentedControl];
 
-    // Search bar
-    _appSearchBar = [[UISearchBar alloc] init];
-    _appSearchBar.translatesAutoresizingMaskIntoConstraints = NO;
-    _appSearchBar.placeholder = @"Search apps...";
-    _appSearchBar.searchBarStyle = UISearchBarStyleMinimal;
-    _appSearchBar.barTintColor = [UIColor clearColor];
-    _appSearchBar.tintColor = [MiOSTheme accentColor];
-    _appSearchBar.delegate = self;
+    _searchField = [self pillFieldWithPlaceholder:@"Search apps" icon:@"magnifyingglass"];
+    _searchField.clearButtonMode = UITextFieldViewModeWhileEditing;
+    _searchField.returnKeyType = UIReturnKeySearch;
+    [_searchField addTarget:self action:@selector(filterApps) forControlEvents:UIControlEventEditingChanged];
+    [_step1View addSubview:_searchField];
 
-    UITextField *searchField = _appSearchBar.searchTextField;
-    searchField.backgroundColor = [MiOSTheme accentTintedCardBackground];
-    searchField.textColor = [MiOSTheme primaryText];
-    searchField.layer.cornerRadius = 10;
-    searchField.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
-    searchField.layer.borderWidth = 1.0;
-    [_step1View addSubview:_appSearchBar];
-
-    // Collection view - full width list layout
     UICollectionViewFlowLayout *layout = [[UICollectionViewFlowLayout alloc] init];
-    layout.minimumInteritemSpacing = 0;
-    layout.minimumLineSpacing = 6;
-    layout.sectionInset = UIEdgeInsetsMake(0, 0, 0, 0);
-
+    layout.minimumLineSpacing = 8;
     _collectionView = [[UICollectionView alloc] initWithFrame:CGRectZero collectionViewLayout:layout];
     _collectionView.translatesAutoresizingMaskIntoConstraints = NO;
     _collectionView.backgroundColor = [UIColor clearColor];
     _collectionView.dataSource = self;
     _collectionView.delegate = self;
-    _collectionView.allowsMultipleSelection = YES;
     _collectionView.showsVerticalScrollIndicator = NO;
     _collectionView.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
-    [_collectionView registerClass:[MiOSAppListCell class] forCellWithReuseIdentifier:kAppCellReuseID];
+    _collectionView.contentInset = UIEdgeInsetsMake(4, 0, 12, 0);
+    [_collectionView registerClass:[MiOSAppRowCell class] forCellWithReuseIdentifier:kAppCellReuseID];
     [_step1View addSubview:_collectionView];
 
-    // Next button - gradient
-    _nextButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    _nextButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [_nextButton setTitle:@"Next" forState:UIControlStateNormal];
-    [_nextButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    _nextButton.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
-    _nextButton.layer.cornerRadius = 16;
-    _nextButton.layer.cornerCurve = kCACornerCurveContinuous;
-    [_nextButton addTarget:self action:@selector(nextTapped) forControlEvents:UIControlEventTouchUpInside];
+    _nextButton = [[MiOSPrimaryButton alloc] initWithTitle:@"" watermark:_entry == MiOSEditorEntryApps ? @"checkmark.seal.fill" : @"arrow.right.circle.fill"];
+    [_nextButton addTarget:self action:@selector(primaryStep1Tapped) forControlEvents:UIControlEventTouchUpInside];
     [_step1View addSubview:_nextButton];
 
     [NSLayoutConstraint activateConstraints:@[
         [closeBtn.topAnchor constraintEqualToAnchor:_step1View.topAnchor constant:16],
         [closeBtn.trailingAnchor constraintEqualToAnchor:_step1View.trailingAnchor constant:-16],
-        [closeBtn.widthAnchor constraintEqualToConstant:32],
-        [closeBtn.heightAnchor constraintEqualToConstant:32],
 
         [titleLabel.topAnchor constraintEqualToAnchor:_step1View.topAnchor constant:16],
-        [titleLabel.leadingAnchor constraintEqualToAnchor:_step1View.leadingAnchor constant:16],
+        [titleLabel.leadingAnchor constraintEqualToAnchor:_step1View.leadingAnchor constant:20],
         [titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:closeBtn.leadingAnchor constant:-8],
+        [stepLabel.topAnchor constraintEqualToAnchor:titleLabel.bottomAnchor constant:2],
+        [stepLabel.leadingAnchor constraintEqualToAnchor:titleLabel.leadingAnchor],
 
-        [stepLabel.topAnchor constraintEqualToAnchor:titleLabel.bottomAnchor constant:4],
-        [stepLabel.leadingAnchor constraintEqualToAnchor:_step1View.leadingAnchor constant:16],
-
-        [_nameField.topAnchor constraintEqualToAnchor:stepLabel.bottomAnchor constant:16],
+        [_nameField.topAnchor constraintEqualToAnchor:stepLabel.bottomAnchor constant:18],
         [_nameField.leadingAnchor constraintEqualToAnchor:_step1View.leadingAnchor constant:16],
         [_nameField.trailingAnchor constraintEqualToAnchor:_step1View.trailingAnchor constant:-16],
-        [_nameField.heightAnchor constraintEqualToConstant:48],
+        [_nameField.heightAnchor constraintEqualToConstant:52],
 
         [_segmentedControl.topAnchor constraintEqualToAnchor:_nameField.bottomAnchor constant:12],
-        [_segmentedControl.leadingAnchor constraintEqualToAnchor:_step1View.leadingAnchor constant:16],
-        [_segmentedControl.trailingAnchor constraintEqualToAnchor:_step1View.trailingAnchor constant:-16],
-        [_segmentedControl.heightAnchor constraintEqualToConstant:32],
+        [_segmentedControl.leadingAnchor constraintEqualToAnchor:_nameField.leadingAnchor],
+        [_segmentedControl.trailingAnchor constraintEqualToAnchor:_nameField.trailingAnchor],
+        [_segmentedControl.heightAnchor constraintEqualToConstant:36],
 
-        [_appSearchBar.topAnchor constraintEqualToAnchor:_segmentedControl.bottomAnchor constant:8],
-        [_appSearchBar.leadingAnchor constraintEqualToAnchor:_step1View.leadingAnchor constant:8],
-        [_appSearchBar.trailingAnchor constraintEqualToAnchor:_step1View.trailingAnchor constant:-8],
+        [_searchField.topAnchor constraintEqualToAnchor:_segmentedControl.bottomAnchor constant:12],
+        [_searchField.leadingAnchor constraintEqualToAnchor:_nameField.leadingAnchor],
+        [_searchField.trailingAnchor constraintEqualToAnchor:_nameField.trailingAnchor],
+        [_searchField.heightAnchor constraintEqualToConstant:46],
 
-        [_collectionView.topAnchor constraintEqualToAnchor:_appSearchBar.bottomAnchor constant:4],
-        [_collectionView.leadingAnchor constraintEqualToAnchor:_step1View.leadingAnchor constant:16],
-        [_collectionView.trailingAnchor constraintEqualToAnchor:_step1View.trailingAnchor constant:-16],
-        [_collectionView.bottomAnchor constraintEqualToAnchor:_nextButton.topAnchor constant:-12],
+        [_collectionView.topAnchor constraintEqualToAnchor:_searchField.bottomAnchor constant:8],
+        [_collectionView.leadingAnchor constraintEqualToAnchor:_nameField.leadingAnchor],
+        [_collectionView.trailingAnchor constraintEqualToAnchor:_nameField.trailingAnchor],
+        [_collectionView.bottomAnchor constraintEqualToAnchor:_nextButton.topAnchor constant:-10],
 
-        [_nextButton.leadingAnchor constraintEqualToAnchor:_step1View.leadingAnchor constant:16],
-        [_nextButton.trailingAnchor constraintEqualToAnchor:_step1View.trailingAnchor constant:-16],
-        [_nextButton.bottomAnchor constraintEqualToAnchor:_step1View.safeAreaLayoutGuide.bottomAnchor constant:-16],
-        [_nextButton.heightAnchor constraintEqualToConstant:52],
+        [_nextButton.leadingAnchor constraintEqualToAnchor:_nameField.leadingAnchor],
+        [_nextButton.trailingAnchor constraintEqualToAnchor:_nameField.trailingAnchor],
+        [_nextButton.bottomAnchor constraintEqualToAnchor:_step1View.safeAreaLayoutGuide.bottomAnchor constant:-12],
     ]];
 
-    [self applyGradientToButton:_nextButton];
     [self updateNextButtonTitle];
 }
 
 - (void)updateNextButtonTitle {
-    NSString *title = [NSString stringWithFormat:@"Next (%lu selected)", (unsigned long)_selectedBundleIDs.count];
-    [_nextButton setTitle:title forState:UIControlStateNormal];
-}
-
-- (void)updateDynamicAccentFromSelection {
-    if (_selectedBundleIDs.count == 0) {
-        [MiOSTheme resetDynamicAccent];
-        return;
-    }
-
-    NSString *firstBundleID = [[_selectedBundleIDs allObjects] sortedArrayUsingSelector:@selector(compare:)].firstObject;
-    UIImage *icon = nil;
-
-    for (MiOSAppInfo *app in _allAppsList) {
-        if ([app.bundleID isEqualToString:firstBundleID]) {
-            icon = app.icon;
-            break;
-        }
-    }
-    if (!icon) {
-        icon = [UIImage _applicationIconImageForBundleIdentifier:firstBundleID format:0 scale:[UIScreen mainScreen].scale];
-    }
-
-    if (icon) {
-        UIColor *vibrant = [MiOSColorExtractor vibrantColorFromImage:icon];
-        UIColor *gradEnd = [MiOSColorExtractor accentGradientEndFromColor:vibrant];
-        [MiOSTheme setDynamicAccentColor:vibrant];
-        [MiOSTheme setDynamicAccentGradientEnd:gradEnd];
-    } else {
-        [MiOSTheme resetDynamicAccent];
-    }
-}
-
-- (void)dealloc {
-    [MiOSTheme resetDynamicAccent];
+    NSString *verb = _entry == MiOSEditorEntryApps ? @"Save Apps" : @"Next";
+    _nextButton.title = [NSString stringWithFormat:@"%@  ·  %lu selected", verb, (unsigned long)_selectedBundleIDs.count];
 }
 
 #pragma mark - Build Step 2
 
 - (void)buildStep2 {
+    BOOL wasVisible = (_currentStep == 2 && _step2View && !_step2View.hidden);
+    [_step2View removeFromSuperview];
+
     _step2View = [[UIView alloc] init];
     _step2View.translatesAutoresizingMaskIntoConstraints = NO;
-    _step2View.hidden = YES;
+    _step2View.hidden = !wasVisible;
     [self.view addSubview:_step2View];
-
     [NSLayoutConstraint activateConstraints:@[
         [_step2View.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
         [_step2View.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
@@ -642,34 +612,19 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
         [_step2View.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
     ]];
 
-    // Back button
-    UIButton *backBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    backBtn.translatesAutoresizingMaskIntoConstraints = NO;
-    UIImageSymbolConfiguration *backCfg = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightSemibold];
-    [backBtn setImage:[UIImage systemImageNamed:@"chevron.left" withConfiguration:backCfg] forState:UIControlStateNormal];
-    [backBtn setTitle:@" Back" forState:UIControlStateNormal];
-    backBtn.tintColor = [MiOSTheme accentColor];
-    backBtn.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
-    [backBtn addTarget:self action:@selector(backTapped) forControlEvents:UIControlEventTouchUpInside];
+    UIButton *backBtn = [self circleButtonWithSymbol:@"chevron.left" action:@selector(backTapped)];
     [_step2View addSubview:backBtn];
+    UIButton *closeBtn = [self circleButtonWithSymbol:@"xmark" action:@selector(cancelTapped)];
+    [_step2View addSubview:closeBtn];
 
-    // Title
-    UILabel *titleLabel = [[UILabel alloc] init];
-    titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    titleLabel.text = @"Configure";
-    titleLabel.font = [MiOSTheme titleFont];
-    titleLabel.textColor = [MiOSTheme primaryText];
+    UILabel *titleLabel = [self labelWithFont:[UIFont systemFontOfSize:30 weight:UIFontWeightBold] color:[MiOSTheme primaryText]];
+    titleLabel.text = _entry == MiOSEditorEntrySpoofing ? @"Spoofing" : @"Configure";
     [_step2View addSubview:titleLabel];
 
-    // Step indicator
-    UILabel *stepLabel = [[UILabel alloc] init];
-    stepLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    stepLabel.text = @"Step 2 of 2 - Settings";
-    stepLabel.font = [MiOSTheme captionFont];
-    stepLabel.textColor = [MiOSTheme tertiaryText];
+    UILabel *stepLabel = [self labelWithFont:[UIFont systemFontOfSize:13 weight:UIFontWeightMedium] color:[MiOSTheme secondaryText]];
+    stepLabel.text = _entry == MiOSEditorEntrySpoofing ? @"Location, device & identifiers" : @"Step 2 of 2 · Spoofing";
     [_step2View addSubview:stepLabel];
 
-    // Scroll view
     _step2Scroll = [[UIScrollView alloc] init];
     _step2Scroll.translatesAutoresizingMaskIntoConstraints = NO;
     _step2Scroll.showsVerticalScrollIndicator = NO;
@@ -680,126 +635,134 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     _step2Stack = [[UIStackView alloc] init];
     _step2Stack.translatesAutoresizingMaskIntoConstraints = NO;
     _step2Stack.axis = UILayoutConstraintAxisVertical;
-    _step2Stack.spacing = 20;
+    _step2Stack.spacing = 22;
     [_step2Scroll addSubview:_step2Stack];
 
     [NSLayoutConstraint activateConstraints:@[
         [backBtn.topAnchor constraintEqualToAnchor:_step2View.topAnchor constant:16],
-        [backBtn.leadingAnchor constraintEqualToAnchor:_step2View.leadingAnchor constant:8],
+        [backBtn.leadingAnchor constraintEqualToAnchor:_step2View.leadingAnchor constant:16],
+        [closeBtn.topAnchor constraintEqualToAnchor:backBtn.topAnchor],
+        [closeBtn.trailingAnchor constraintEqualToAnchor:_step2View.trailingAnchor constant:-16],
 
-        [titleLabel.topAnchor constraintEqualToAnchor:backBtn.bottomAnchor constant:8],
-        [titleLabel.leadingAnchor constraintEqualToAnchor:_step2View.leadingAnchor constant:16],
+        [titleLabel.topAnchor constraintEqualToAnchor:backBtn.bottomAnchor constant:12],
+        [titleLabel.leadingAnchor constraintEqualToAnchor:_step2View.leadingAnchor constant:20],
+        [stepLabel.topAnchor constraintEqualToAnchor:titleLabel.bottomAnchor constant:2],
+        [stepLabel.leadingAnchor constraintEqualToAnchor:titleLabel.leadingAnchor],
 
-        [stepLabel.topAnchor constraintEqualToAnchor:titleLabel.bottomAnchor constant:4],
-        [stepLabel.leadingAnchor constraintEqualToAnchor:_step2View.leadingAnchor constant:16],
-
-        [_step2Scroll.topAnchor constraintEqualToAnchor:stepLabel.bottomAnchor constant:16],
+        [_step2Scroll.topAnchor constraintEqualToAnchor:stepLabel.bottomAnchor constant:14],
         [_step2Scroll.leadingAnchor constraintEqualToAnchor:_step2View.leadingAnchor],
         [_step2Scroll.trailingAnchor constraintEqualToAnchor:_step2View.trailingAnchor],
         [_step2Scroll.bottomAnchor constraintEqualToAnchor:_step2View.bottomAnchor],
 
-        [_step2Stack.topAnchor constraintEqualToAnchor:_step2Scroll.topAnchor],
+        [_step2Stack.topAnchor constraintEqualToAnchor:_step2Scroll.contentLayoutGuide.topAnchor constant:4],
         [_step2Stack.leadingAnchor constraintEqualToAnchor:_step2View.leadingAnchor constant:16],
         [_step2Stack.trailingAnchor constraintEqualToAnchor:_step2View.trailingAnchor constant:-16],
-        [_step2Stack.bottomAnchor constraintEqualToAnchor:_step2Scroll.bottomAnchor constant:-32],
+        [_step2Stack.bottomAnchor constraintEqualToAnchor:_step2Scroll.contentLayoutGuide.bottomAnchor constant:-32],
     ]];
 
-    [self buildRandomSetupButton];
+    [self buildStep2Content];
+}
+
+- (void)buildStep2Content {
+    for (UIView *v in [_step2Stack.arrangedSubviews copy]) {
+        [_step2Stack removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    [self buildRandomSetupRow];
     [self buildGPSSection];
     [self buildIdentifiersSection];
     [self buildDeviceSection];
     [self buildSaveButton];
 }
 
-#pragma mark - Random Setup Button
+#pragma mark - Random Setup
 
-- (void)buildRandomSetupButton {
-    _randomSetupButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    _randomSetupButton.translatesAutoresizingMaskIntoConstraints = NO;
+- (void)buildRandomSetupRow {
+    UIColor *accent = [MiOSTheme accentColor];
+    UIView *row = [[UIView alloc] init];
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+    row.backgroundColor = [MiOSTheme tileBackground];
+    row.layer.cornerRadius = 22;
+    row.layer.cornerCurve = kCACornerCurveContinuous;
+    row.layer.borderWidth = 1.0;
+    row.layer.borderColor = [accent colorWithAlphaComponent:0.35].CGColor;
+    row.clipsToBounds = YES;
 
-    UIImageSymbolConfiguration *diceCfg = [UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightBold];
-    UIImage *diceIcon = [UIImage systemImageNamed:@"dice.fill" withConfiguration:diceCfg];
-    [_randomSetupButton setImage:diceIcon forState:UIControlStateNormal];
-    [_randomSetupButton setTitle:@"  Random Setup" forState:UIControlStateNormal];
-    [_randomSetupButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    _randomSetupButton.tintColor = [UIColor whiteColor];
-    _randomSetupButton.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
-    _randomSetupButton.layer.cornerRadius = 16;
-    _randomSetupButton.layer.cornerCurve = kCACornerCurveContinuous;
-    [_randomSetupButton addTarget:self action:@selector(randomSetupTapped) forControlEvents:UIControlEventTouchUpInside];
-    [_randomSetupButton.heightAnchor constraintEqualToConstant:52].active = YES;
+    UIImageSymbolConfiguration *bigCfg = [UIImageSymbolConfiguration configurationWithPointSize:70 weight:UIImageSymbolWeightBold];
+    UIImageView *watermark = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"dice.fill" withConfiguration:bigCfg]];
+    watermark.translatesAutoresizingMaskIntoConstraints = NO;
+    watermark.tintColor = [accent colorWithAlphaComponent:0.08];
+    watermark.transform = CGAffineTransformMakeRotation(0.25);
+    [row addSubview:watermark];
 
-    [self applyGradientToButton:_randomSetupButton];
-    [_step2Stack addArrangedSubview:_randomSetupButton];
+    UIView *iconCircle = [[UIView alloc] init];
+    iconCircle.translatesAutoresizingMaskIntoConstraints = NO;
+    iconCircle.backgroundColor = [accent colorWithAlphaComponent:0.18];
+    iconCircle.layer.cornerRadius = 20;
+    [row addSubview:iconCircle];
+
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightBold];
+    UIImageView *dice = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"dice.fill" withConfiguration:cfg]];
+    dice.translatesAutoresizingMaskIntoConstraints = NO;
+    dice.tintColor = accent;
+    [iconCircle addSubview:dice];
+
+    UILabel *title = [self labelWithFont:[UIFont systemFontOfSize:16 weight:UIFontWeightSemibold] color:[MiOSTheme primaryText]];
+    title.text = @"Random Setup";
+    [row addSubview:title];
+    UILabel *sub = [self labelWithFont:[UIFont systemFontOfSize:12 weight:UIFontWeightMedium] color:[MiOSTheme secondaryText]];
+    sub.text = @"Randomize location, device & IDs";
+    [row addSubview:sub];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [row.heightAnchor constraintEqualToConstant:68],
+        [watermark.centerXAnchor constraintEqualToAnchor:row.trailingAnchor constant:-30],
+        [watermark.centerYAnchor constraintEqualToAnchor:row.centerYAnchor constant:6],
+        [iconCircle.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:14],
+        [iconCircle.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [iconCircle.widthAnchor constraintEqualToConstant:40],
+        [iconCircle.heightAnchor constraintEqualToConstant:40],
+        [dice.centerXAnchor constraintEqualToAnchor:iconCircle.centerXAnchor],
+        [dice.centerYAnchor constraintEqualToAnchor:iconCircle.centerYAnchor],
+        [title.leadingAnchor constraintEqualToAnchor:iconCircle.trailingAnchor constant:12],
+        [title.bottomAnchor constraintEqualToAnchor:row.centerYAnchor constant:-1],
+        [sub.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+        [sub.topAnchor constraintEqualToAnchor:row.centerYAnchor constant:2],
+    ]];
+
+    [row addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(randomSetupTapped)]];
+    [_step2Stack addArrangedSubview:row];
 }
 
 - (void)randomSetupTapped {
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
-    [haptic impactOccurred];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy] impactOccurred];
 
-    // Enable GPS and set random coordinates
     _gpsEnabled = YES;
-    _selectedLatitude = (double)(arc4random_uniform(180000000)) / 1000000.0 - 90.0;
-    _selectedLongitude = (double)(arc4random_uniform(360000000)) / 1000000.0 - 180.0;
+    _selectedLatitude = (double)arc4random_uniform(140000000) / 1000000.0 - 60.0;
+    _selectedLongitude = (double)arc4random_uniform(360000000) / 1000000.0 - 180.0;
     _selectedLocationName = nil;
-    [self updateMapToCurrentCoordinates];
-    [self updateCoordLabel];
 
-    // Enable device spoof and pick random device
     _deviceSpoofEnabled = YES;
     if (_deviceList.count > 0) {
         _selectedDeviceIndex = arc4random_uniform((uint32_t)_deviceList.count);
         [self updateIOSVersionsForDeviceQuiet];
-
-        // Pick random iOS version
-        if (_iosVersionList.count > 0) {
-            _selectedIOSIndex = arc4random_uniform((uint32_t)_iosVersionList.count);
-        }
-
-        // Pick random storage
+        if (_iosVersionList.count > 0) _selectedIOSIndex = arc4random_uniform((uint32_t)_iosVersionList.count);
         MiOSDeviceModel *device = _deviceList[_selectedDeviceIndex];
-        if (device.storageOptions.count > 0) {
-            _selectedStorageIndex = arc4random_uniform((uint32_t)device.storageOptions.count);
-        }
+        if (device.storageOptions.count > 0) _selectedStorageIndex = arc4random_uniform((uint32_t)device.storageOptions.count);
     }
-    [self updateDeviceCardUI];
-    [self rebuildStoragePills];
-    [self updateIOSVersionButtonTitle];
 
-    // Enable all identifier toggles
     _spoofDeviceCheck = YES;
-
     _spoofVendorID = YES;
     _vendorID = [[NSUUID UUID] UUIDString];
-    _vendorIDLabel.text = _vendorID;
-    _vendorIDContainer.hidden = NO;
-
     _spoofAdvertisingID = YES;
     _advertisingID = [[NSUUID UUID] UUIDString];
-    _advertisingIDLabel.text = _advertisingID;
-    _advertisingIDContainer.hidden = NO;
-
     _spoofCloudToken = YES;
 
-    // Show all hidden containers
-    _gpsMapContainer.hidden = NO;
-    _deviceCardContainer.hidden = NO;
+    [self buildStep2Content];
 
-    // Rebuild step 2 to reflect toggle states
-    // We need to rebuild the sections since toggle cells need isOn updated
-    // Easiest: remove all from stack and rebuild
-    for (UIView *v in _step2Stack.arrangedSubviews) {
-        [v removeFromSuperview];
-    }
-    [self buildRandomSetupButton];
-    [self buildGPSSection];
-    [self buildIdentifiersSection];
-    [self buildDeviceSection];
-    [self buildSaveButton];
-
-    // Animate a subtle flash
     UIView *flash = [[UIView alloc] initWithFrame:self.view.bounds];
-    flash.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.08];
+    flash.userInteractionEnabled = NO;
+    flash.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.10];
     [self.view addSubview:flash];
     [UIView animateWithDuration:0.5 animations:^{
         flash.alpha = 0;
@@ -813,117 +776,100 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 - (void)buildGPSSection {
     MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@"GPS Spoofing"];
 
-    MiOSToggleCell *gpsToggle = [[MiOSToggleCell alloc]
-        initWithTitle:@"Enable GPS Spoof"
-             subtitle:@"Override device location"
-                 icon:@"location.fill"
-                color:[UIColor systemBlueColor]
-                  key:@"gpsEnabled"];
+    MiOSToggleCell *gpsToggle = [[MiOSToggleCell alloc] initWithTitle:@"Enable GPS Spoof"
+                                                              subtitle:@"Override device location"
+                                                                  icon:@"location.fill"
+                                                                 color:[UIColor systemBlueColor]
+                                                                   key:@"gpsEnabled"];
     gpsToggle.isOn = _gpsEnabled;
     gpsToggle.delegate = self;
     [section addCellView:gpsToggle];
 
-    // Map container
     _gpsMapContainer = [[UIView alloc] init];
     _gpsMapContainer.translatesAutoresizingMaskIntoConstraints = NO;
     _gpsMapContainer.hidden = !_gpsEnabled;
 
-    // Map wrapper with rounded corners
     UIView *mapWrapper = [[UIView alloc] init];
     mapWrapper.translatesAutoresizingMaskIntoConstraints = NO;
-    mapWrapper.layer.cornerRadius = [MiOSTheme cardCornerRadius];
+    mapWrapper.layer.cornerRadius = 18;
     mapWrapper.layer.cornerCurve = kCACornerCurveContinuous;
     mapWrapper.clipsToBounds = YES;
-    mapWrapper.layer.borderColor = [MiOSTheme separator].CGColor;
-    mapWrapper.layer.borderWidth = 0.5;
+    mapWrapper.layer.borderColor = [MiOSTheme hairline].CGColor;
+    mapWrapper.layer.borderWidth = 1.0;
     [_gpsMapContainer addSubview:mapWrapper];
 
     _mapView = [[MKMapView alloc] init];
     _mapView.translatesAutoresizingMaskIntoConstraints = NO;
     _mapView.delegate = self;
     _mapView.mapType = MKMapTypeStandard;
+    _mapView.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     [mapWrapper addSubview:_mapView];
 
-    // Search bar overlaid on map
     _locationSearchBar = [[UISearchBar alloc] init];
     _locationSearchBar.translatesAutoresizingMaskIntoConstraints = NO;
-    _locationSearchBar.placeholder = @"Search location...";
+    _locationSearchBar.placeholder = @"Search location";
     _locationSearchBar.searchBarStyle = UISearchBarStyleMinimal;
-    _locationSearchBar.delegate = self;
     _locationSearchBar.backgroundImage = [UIImage new];
-    _locationSearchBar.backgroundColor = [[MiOSTheme cardBackground] colorWithAlphaComponent:0.92];
-    _locationSearchBar.layer.cornerRadius = 10;
-    _locationSearchBar.clipsToBounds = YES;
+    _locationSearchBar.delegate = self;
     _locationSearchBar.tintColor = [MiOSTheme accentColor];
+    _locationSearchBar.searchTextField.backgroundColor = [[MiOSTheme tileBackground] colorWithAlphaComponent:0.96];
     _locationSearchBar.searchTextField.textColor = [MiOSTheme primaryText];
+    _locationSearchBar.searchTextField.layer.cornerRadius = 12;
+    _locationSearchBar.searchTextField.clipsToBounds = YES;
     [mapWrapper addSubview:_locationSearchBar];
 
-    // Search results table overlaid on map
     _locationSearchResultsTable = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     _locationSearchResultsTable.translatesAutoresizingMaskIntoConstraints = NO;
     _locationSearchResultsTable.dataSource = self;
     _locationSearchResultsTable.delegate = self;
-    _locationSearchResultsTable.backgroundColor = [[MiOSTheme cardBackground] colorWithAlphaComponent:0.95];
-    _locationSearchResultsTable.separatorColor = [MiOSTheme separator];
+    _locationSearchResultsTable.backgroundColor = [[MiOSTheme tileBackground] colorWithAlphaComponent:0.97];
+    _locationSearchResultsTable.separatorColor = [MiOSTheme hairline];
     _locationSearchResultsTable.rowHeight = 48;
     _locationSearchResultsTable.hidden = YES;
-    _locationSearchResultsTable.layer.cornerRadius = 10;
+    _locationSearchResultsTable.layer.cornerRadius = 14;
     _locationSearchResultsTable.clipsToBounds = YES;
     [mapWrapper addSubview:_locationSearchResultsTable];
 
     [NSLayoutConstraint activateConstraints:@[
-        [mapWrapper.topAnchor constraintEqualToAnchor:_gpsMapContainer.topAnchor constant:8],
+        [mapWrapper.topAnchor constraintEqualToAnchor:_gpsMapContainer.topAnchor constant:4],
         [mapWrapper.leadingAnchor constraintEqualToAnchor:_gpsMapContainer.leadingAnchor constant:12],
         [mapWrapper.trailingAnchor constraintEqualToAnchor:_gpsMapContainer.trailingAnchor constant:-12],
         [mapWrapper.heightAnchor constraintEqualToConstant:250],
-
         [_mapView.topAnchor constraintEqualToAnchor:mapWrapper.topAnchor],
         [_mapView.leadingAnchor constraintEqualToAnchor:mapWrapper.leadingAnchor],
         [_mapView.trailingAnchor constraintEqualToAnchor:mapWrapper.trailingAnchor],
         [_mapView.bottomAnchor constraintEqualToAnchor:mapWrapper.bottomAnchor],
-
-        [_locationSearchBar.topAnchor constraintEqualToAnchor:mapWrapper.topAnchor constant:8],
-        [_locationSearchBar.leadingAnchor constraintEqualToAnchor:mapWrapper.leadingAnchor constant:8],
-        [_locationSearchBar.trailingAnchor constraintEqualToAnchor:mapWrapper.trailingAnchor constant:-8],
-
-        [_locationSearchResultsTable.topAnchor constraintEqualToAnchor:_locationSearchBar.bottomAnchor constant:4],
-        [_locationSearchResultsTable.leadingAnchor constraintEqualToAnchor:mapWrapper.leadingAnchor constant:8],
-        [_locationSearchResultsTable.trailingAnchor constraintEqualToAnchor:mapWrapper.trailingAnchor constant:-8],
+        [_locationSearchBar.topAnchor constraintEqualToAnchor:mapWrapper.topAnchor constant:4],
+        [_locationSearchBar.leadingAnchor constraintEqualToAnchor:mapWrapper.leadingAnchor constant:2],
+        [_locationSearchBar.trailingAnchor constraintEqualToAnchor:mapWrapper.trailingAnchor constant:-2],
+        [_locationSearchResultsTable.topAnchor constraintEqualToAnchor:_locationSearchBar.bottomAnchor],
+        [_locationSearchResultsTable.leadingAnchor constraintEqualToAnchor:mapWrapper.leadingAnchor constant:10],
+        [_locationSearchResultsTable.trailingAnchor constraintEqualToAnchor:mapWrapper.trailingAnchor constant:-10],
         [_locationSearchResultsTable.heightAnchor constraintLessThanOrEqualToConstant:192],
     ]];
 
-    // Long press gesture for pin placement
     UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleMapLongPress:)];
     longPress.minimumPressDuration = 0.5;
     [_mapView addGestureRecognizer:longPress];
+    [_mapView addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleMapTap:)]];
 
-    // Tap gesture to dismiss search and place pin
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleMapTap:)];
-    [_mapView addGestureRecognizer:tap];
-
-    // Set initial map region if we have coordinates
     if (_selectedLatitude != 0 || _selectedLongitude != 0) {
         CLLocationCoordinate2D coord = CLLocationCoordinate2DMake(_selectedLatitude, _selectedLongitude);
-        MKCoordinateRegion region = MKCoordinateRegionMakeWithDistance(coord, 5000, 5000);
-        [_mapView setRegion:region animated:NO];
+        [_mapView setRegion:MKCoordinateRegionMakeWithDistance(coord, 5000, 5000) animated:NO];
         _mapPin = [[MKPointAnnotation alloc] init];
         _mapPin.coordinate = coord;
         _mapPin.title = @"Spoofed Location";
         [_mapView addAnnotation:_mapPin];
     } else {
-        // Default to a zoomed-out region so map tiles load instead of a blank world view.
+        _mapPin = nil;
         CLLocationCoordinate2D fallback = CLLocationCoordinate2DMake(37.7749, -122.4194);
-        MKCoordinateRegion region = MKCoordinateRegionMakeWithDistance(fallback, 400000, 400000);
-        [_mapView setRegion:region animated:NO];
+        [_mapView setRegion:MKCoordinateRegionMakeWithDistance(fallback, 400000, 400000) animated:NO];
     }
 
-    // Coordinate label below map
-    _coordLabel = [[UILabel alloc] init];
-    _coordLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _coordLabel.font = [MiOSTheme monoFont];
-    _coordLabel.textColor = [MiOSTheme accentColor];
+    _coordLabel = [self labelWithFont:[MiOSTheme monoFont] color:[MiOSTheme accentColor]];
     _coordLabel.textAlignment = NSTextAlignmentCenter;
-    _coordLabel.numberOfLines = 1;
+    _coordLabel.adjustsFontSizeToFitWidth = YES;
+    _coordLabel.minimumScaleFactor = 0.7;
     [_gpsMapContainer addSubview:_coordLabel];
     [self updateCoordLabel];
 
@@ -931,7 +877,7 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
         [_coordLabel.topAnchor constraintEqualToAnchor:mapWrapper.bottomAnchor constant:10],
         [_coordLabel.leadingAnchor constraintEqualToAnchor:_gpsMapContainer.leadingAnchor constant:16],
         [_coordLabel.trailingAnchor constraintEqualToAnchor:_gpsMapContainer.trailingAnchor constant:-16],
-        [_coordLabel.bottomAnchor constraintEqualToAnchor:_gpsMapContainer.bottomAnchor constant:-8],
+        [_coordLabel.bottomAnchor constraintEqualToAnchor:_gpsMapContainer.bottomAnchor constant:-12],
     ]];
 
     [section addCellView:_gpsMapContainer];
@@ -939,27 +885,14 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 }
 
 - (void)updateCoordLabel {
-    _coordLabel.text = [NSString stringWithFormat:@"Lat: %.6f  |  Lon: %.6f", _selectedLatitude, _selectedLongitude];
-}
-
-- (void)updateMapToCurrentCoordinates {
-    CLLocationCoordinate2D coord = CLLocationCoordinate2DMake(_selectedLatitude, _selectedLongitude);
-
-    if (!_mapPin) {
-        _mapPin = [[MKPointAnnotation alloc] init];
-        _mapPin.title = @"Spoofed Location";
-        [_mapView addAnnotation:_mapPin];
-    }
-    _mapPin.coordinate = coord;
-
-    MKCoordinateRegion region = MKCoordinateRegionMakeWithDistance(coord, 5000, 5000);
-    [_mapView setRegion:region animated:YES];
+    NSString *coords = [NSString stringWithFormat:@"%.5f, %.5f", _selectedLatitude, _selectedLongitude];
+    _coordLabel.text = _selectedLocationName.length > 0
+        ? [NSString stringWithFormat:@"%@  ·  %@", _selectedLocationName, coords] : coords;
 }
 
 - (void)setMapLocationToCoordinate:(CLLocationCoordinate2D)coord {
     _selectedLatitude = coord.latitude;
     _selectedLongitude = coord.longitude;
-
     if (!_mapPin) {
         _mapPin = [[MKPointAnnotation alloc] init];
         _mapPin.title = @"Spoofed Location";
@@ -967,17 +900,14 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     }
     _mapPin.coordinate = coord;
     [self updateCoordLabel];
-
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-    [haptic impactOccurred];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
 }
 
 - (void)handleMapLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state != UIGestureRecognizerStateBegan) return;
-
     CGPoint point = [gesture locationInView:_mapView];
-    CLLocationCoordinate2D coord = [_mapView convertPoint:point toCoordinateFromView:_mapView];
-    [self setMapLocationToCoordinate:coord];
+    _selectedLocationName = nil;
+    [self setMapLocationToCoordinate:[_mapView convertPoint:point toCoordinateFromView:_mapView]];
 }
 
 - (void)handleMapTap:(UITapGestureRecognizer *)gesture {
@@ -986,21 +916,17 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
         [_locationSearchBar resignFirstResponder];
         return;
     }
-
     CGPoint point = [gesture locationInView:_mapView];
-    CLLocationCoordinate2D coord = [_mapView convertPoint:point toCoordinateFromView:_mapView];
-    [self setMapLocationToCoordinate:coord];
+    _selectedLocationName = nil;
+    [self setMapLocationToCoordinate:[_mapView convertPoint:point toCoordinateFromView:_mapView]];
 }
 
 #pragma mark - MKMapViewDelegate
 
 - (MKAnnotationView *)mapView:(MKMapView *)mapView viewForAnnotation:(id<MKAnnotation>)annotation {
     if ([annotation isKindOfClass:[MKUserLocation class]]) return nil;
-
     MKMarkerAnnotationView *marker = (MKMarkerAnnotationView *)[mapView dequeueReusableAnnotationViewWithIdentifier:@"pin"];
-    if (!marker) {
-        marker = [[MKMarkerAnnotationView alloc] initWithAnnotation:annotation reuseIdentifier:@"pin"];
-    }
+    if (!marker) marker = [[MKMarkerAnnotationView alloc] initWithAnnotation:annotation reuseIdentifier:@"pin"];
     marker.annotation = annotation;
     marker.markerTintColor = [MiOSTheme accentColor];
     marker.animatesWhenAdded = YES;
@@ -1016,436 +942,6 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 }
 
 - (void)completer:(MKLocalSearchCompleter *)completer didFailWithError:(NSError *)error {
-    // Silently handle
-}
-
-#pragma mark - Device Section
-
-- (void)buildDeviceSection {
-    MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@"Device Spoofing"];
-
-    MiOSToggleCell *deviceToggle = [[MiOSToggleCell alloc]
-        initWithTitle:@"Enable Device Spoof"
-             subtitle:@"Spoof device model and iOS version"
-                 icon:@"iphone.gen3"
-                color:[UIColor systemTealColor]
-                  key:@"deviceSpoofEnabled"];
-    deviceToggle.isOn = _deviceSpoofEnabled;
-    deviceToggle.delegate = self;
-    [section addCellView:deviceToggle];
-
-    // Device card container (hidden when toggle is off)
-    _deviceCardContainer = [[UIView alloc] init];
-    _deviceCardContainer.translatesAutoresizingMaskIntoConstraints = NO;
-    _deviceCardContainer.hidden = !_deviceSpoofEnabled;
-
-    // -- Device display card --
-    UIView *deviceCard = [[UIView alloc] init];
-    deviceCard.translatesAutoresizingMaskIntoConstraints = NO;
-    deviceCard.backgroundColor = [MiOSTheme accentTintedCardBackground];
-    deviceCard.layer.cornerRadius = 14;
-    deviceCard.layer.cornerCurve = kCACornerCurveContinuous;
-    deviceCard.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
-    deviceCard.layer.borderWidth = 1.0;
-    [_deviceCardContainer addSubview:deviceCard];
-
-    // Device icon (SF Symbol)
-    _deviceIconView = [[UIImageView alloc] init];
-    _deviceIconView.translatesAutoresizingMaskIntoConstraints = NO;
-    _deviceIconView.contentMode = UIViewContentModeScaleAspectFit;
-    _deviceIconView.tintColor = [MiOSTheme accentColor];
-    [deviceCard addSubview:_deviceIconView];
-
-    // Device name
-    _deviceNameLabel = [[UILabel alloc] init];
-    _deviceNameLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _deviceNameLabel.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
-    _deviceNameLabel.textColor = [MiOSTheme primaryText];
-    _deviceNameLabel.numberOfLines = 1;
-    [deviceCard addSubview:_deviceNameLabel];
-
-    // Device identifier
-    _deviceIdentifierLabel = [[UILabel alloc] init];
-    _deviceIdentifierLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _deviceIdentifierLabel.font = [UIFont monospacedSystemFontOfSize:13 weight:UIFontWeightRegular];
-    _deviceIdentifierLabel.textColor = [MiOSTheme secondaryText];
-    [deviceCard addSubview:_deviceIdentifierLabel];
-
-    // Specs label
-    _deviceSpecsLabel = [[UILabel alloc] init];
-    _deviceSpecsLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _deviceSpecsLabel.font = [MiOSTheme captionFont];
-    _deviceSpecsLabel.textColor = [MiOSTheme tertiaryText];
-    _deviceSpecsLabel.numberOfLines = 0;
-    [deviceCard addSubview:_deviceSpecsLabel];
-
-    [NSLayoutConstraint activateConstraints:@[
-        [deviceCard.topAnchor constraintEqualToAnchor:_deviceCardContainer.topAnchor constant:8],
-        [deviceCard.leadingAnchor constraintEqualToAnchor:_deviceCardContainer.leadingAnchor constant:12],
-        [deviceCard.trailingAnchor constraintEqualToAnchor:_deviceCardContainer.trailingAnchor constant:-12],
-
-        [_deviceIconView.leadingAnchor constraintEqualToAnchor:deviceCard.leadingAnchor constant:12],
-        [_deviceIconView.centerYAnchor constraintEqualToAnchor:deviceCard.centerYAnchor],
-        [_deviceIconView.widthAnchor constraintEqualToConstant:80],
-        [_deviceIconView.heightAnchor constraintEqualToConstant:100],
-
-        [_deviceNameLabel.topAnchor constraintEqualToAnchor:deviceCard.topAnchor constant:16],
-        [_deviceNameLabel.leadingAnchor constraintEqualToAnchor:_deviceIconView.trailingAnchor constant:16],
-        [_deviceNameLabel.trailingAnchor constraintEqualToAnchor:deviceCard.trailingAnchor constant:-16],
-
-        [_deviceIdentifierLabel.topAnchor constraintEqualToAnchor:_deviceNameLabel.bottomAnchor constant:4],
-        [_deviceIdentifierLabel.leadingAnchor constraintEqualToAnchor:_deviceNameLabel.leadingAnchor],
-        [_deviceIdentifierLabel.trailingAnchor constraintEqualToAnchor:_deviceNameLabel.trailingAnchor],
-
-        [_deviceSpecsLabel.topAnchor constraintEqualToAnchor:_deviceIdentifierLabel.bottomAnchor constant:6],
-        [_deviceSpecsLabel.leadingAnchor constraintEqualToAnchor:_deviceNameLabel.leadingAnchor],
-        [_deviceSpecsLabel.trailingAnchor constraintEqualToAnchor:_deviceNameLabel.trailingAnchor],
-        [_deviceSpecsLabel.bottomAnchor constraintEqualToAnchor:deviceCard.bottomAnchor constant:-16],
-    ]];
-
-    // -- Navigation arrows row --
-    _deviceNavContainer = [[UIView alloc] init];
-    _deviceNavContainer.translatesAutoresizingMaskIntoConstraints = NO;
-    [_deviceCardContainer addSubview:_deviceNavContainer];
-
-    UIButton *prevBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    prevBtn.translatesAutoresizingMaskIntoConstraints = NO;
-    UIImageSymbolConfiguration *arrowCfg = [UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightBold];
-    [prevBtn setImage:[UIImage systemImageNamed:@"chevron.left.circle.fill" withConfiguration:arrowCfg] forState:UIControlStateNormal];
-    prevBtn.tintColor = [MiOSTheme accentColor];
-    [prevBtn addTarget:self action:@selector(prevDeviceTapped) forControlEvents:UIControlEventTouchUpInside];
-    [_deviceNavContainer addSubview:prevBtn];
-
-    UIButton *chooseBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    chooseBtn.translatesAutoresizingMaskIntoConstraints = NO;
-    [chooseBtn setTitle:@"Choose Device" forState:UIControlStateNormal];
-    chooseBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
-    [chooseBtn setTitleColor:[MiOSTheme accentColor] forState:UIControlStateNormal];
-    chooseBtn.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.15];
-    chooseBtn.layer.cornerRadius = 12;
-    chooseBtn.layer.cornerCurve = kCACornerCurveContinuous;
-    chooseBtn.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
-    chooseBtn.layer.borderWidth = 1.0;
-    chooseBtn.contentEdgeInsets = UIEdgeInsetsMake(8, 16, 8, 16);
-    [chooseBtn addTarget:self action:@selector(chooseDeviceTapped) forControlEvents:UIControlEventTouchUpInside];
-    [_deviceNavContainer addSubview:chooseBtn];
-
-    UIButton *nextDevBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    nextDevBtn.translatesAutoresizingMaskIntoConstraints = NO;
-    [nextDevBtn setImage:[UIImage systemImageNamed:@"chevron.right.circle.fill" withConfiguration:arrowCfg] forState:UIControlStateNormal];
-    nextDevBtn.tintColor = [MiOSTheme accentColor];
-    [nextDevBtn addTarget:self action:@selector(nextDeviceTapped) forControlEvents:UIControlEventTouchUpInside];
-    [_deviceNavContainer addSubview:nextDevBtn];
-
-    [NSLayoutConstraint activateConstraints:@[
-        [_deviceNavContainer.topAnchor constraintEqualToAnchor:deviceCard.bottomAnchor constant:12],
-        [_deviceNavContainer.leadingAnchor constraintEqualToAnchor:_deviceCardContainer.leadingAnchor constant:12],
-        [_deviceNavContainer.trailingAnchor constraintEqualToAnchor:_deviceCardContainer.trailingAnchor constant:-12],
-        [_deviceNavContainer.heightAnchor constraintEqualToConstant:36],
-
-        [prevBtn.leadingAnchor constraintEqualToAnchor:_deviceNavContainer.leadingAnchor],
-        [prevBtn.centerYAnchor constraintEqualToAnchor:_deviceNavContainer.centerYAnchor],
-
-        [chooseBtn.centerXAnchor constraintEqualToAnchor:_deviceNavContainer.centerXAnchor],
-        [chooseBtn.centerYAnchor constraintEqualToAnchor:_deviceNavContainer.centerYAnchor],
-
-        [nextDevBtn.trailingAnchor constraintEqualToAnchor:_deviceNavContainer.trailingAnchor],
-        [nextDevBtn.centerYAnchor constraintEqualToAnchor:_deviceNavContainer.centerYAnchor],
-    ]];
-
-    // -- Storage pills section --
-    UILabel *storageLabel = [[UILabel alloc] init];
-    storageLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    storageLabel.text = @"STORAGE";
-    storageLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
-    storageLabel.textColor = [MiOSTheme tertiaryText];
-    [_deviceCardContainer addSubview:storageLabel];
-
-    _storagePillContainer = [[UIView alloc] init];
-    _storagePillContainer.translatesAutoresizingMaskIntoConstraints = NO;
-    [_deviceCardContainer addSubview:_storagePillContainer];
-
-    UIScrollView *storagePillScroll = [[UIScrollView alloc] init];
-    storagePillScroll.translatesAutoresizingMaskIntoConstraints = NO;
-    storagePillScroll.showsHorizontalScrollIndicator = NO;
-    storagePillScroll.tag = 500;
-    [_storagePillContainer addSubview:storagePillScroll];
-
-    [NSLayoutConstraint activateConstraints:@[
-        [storageLabel.topAnchor constraintEqualToAnchor:_deviceNavContainer.bottomAnchor constant:16],
-        [storageLabel.leadingAnchor constraintEqualToAnchor:_deviceCardContainer.leadingAnchor constant:16],
-
-        [_storagePillContainer.topAnchor constraintEqualToAnchor:storageLabel.bottomAnchor constant:8],
-        [_storagePillContainer.leadingAnchor constraintEqualToAnchor:_deviceCardContainer.leadingAnchor constant:12],
-        [_storagePillContainer.trailingAnchor constraintEqualToAnchor:_deviceCardContainer.trailingAnchor constant:-12],
-        [_storagePillContainer.heightAnchor constraintEqualToConstant:38],
-
-        [storagePillScroll.topAnchor constraintEqualToAnchor:_storagePillContainer.topAnchor],
-        [storagePillScroll.leadingAnchor constraintEqualToAnchor:_storagePillContainer.leadingAnchor],
-        [storagePillScroll.trailingAnchor constraintEqualToAnchor:_storagePillContainer.trailingAnchor],
-        [storagePillScroll.bottomAnchor constraintEqualToAnchor:_storagePillContainer.bottomAnchor],
-    ]];
-
-    // -- iOS Version button --
-    UILabel *iosLabel = [[UILabel alloc] init];
-    iosLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    iosLabel.text = @"iOS VERSION";
-    iosLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
-    iosLabel.textColor = [MiOSTheme tertiaryText];
-    [_deviceCardContainer addSubview:iosLabel];
-
-    _iosVersionButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    _iosVersionButton.translatesAutoresizingMaskIntoConstraints = NO;
-    _iosVersionButton.titleLabel.font = [MiOSTheme bodyFont];
-    [_iosVersionButton setTitleColor:[MiOSTheme primaryText] forState:UIControlStateNormal];
-    _iosVersionButton.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.08];
-    _iosVersionButton.layer.cornerRadius = 10;
-    _iosVersionButton.layer.cornerCurve = kCACornerCurveContinuous;
-    _iosVersionButton.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
-    _iosVersionButton.layer.borderWidth = 1.0;
-    _iosVersionButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
-    _iosVersionButton.contentEdgeInsets = UIEdgeInsetsMake(0, 14, 0, 14);
-    UIImageSymbolConfiguration *chevCfg = [UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightMedium];
-    UIImage *chevDown = [UIImage systemImageNamed:@"chevron.down" withConfiguration:chevCfg];
-    [_iosVersionButton setImage:chevDown forState:UIControlStateNormal];
-    _iosVersionButton.semanticContentAttribute = UISemanticContentAttributeForceRightToLeft;
-    _iosVersionButton.imageEdgeInsets = UIEdgeInsetsMake(0, 8, 0, 0);
-    _iosVersionButton.tintColor = [MiOSTheme secondaryText];
-    [_iosVersionButton addTarget:self action:@selector(iosVersionButtonTapped) forControlEvents:UIControlEventTouchUpInside];
-    [_deviceCardContainer addSubview:_iosVersionButton];
-
-    [NSLayoutConstraint activateConstraints:@[
-        [iosLabel.topAnchor constraintEqualToAnchor:_storagePillContainer.bottomAnchor constant:16],
-        [iosLabel.leadingAnchor constraintEqualToAnchor:_deviceCardContainer.leadingAnchor constant:16],
-
-        [_iosVersionButton.topAnchor constraintEqualToAnchor:iosLabel.bottomAnchor constant:8],
-        [_iosVersionButton.leadingAnchor constraintEqualToAnchor:_deviceCardContainer.leadingAnchor constant:12],
-        [_iosVersionButton.trailingAnchor constraintEqualToAnchor:_deviceCardContainer.trailingAnchor constant:-12],
-        [_iosVersionButton.heightAnchor constraintEqualToConstant:44],
-    ]];
-
-    // -- Device name spoofing --
-    [section addSeparator];
-
-    _deviceNameToggle = [[MiOSToggleCell alloc]
-        initWithTitle:@"Custom Device Name"
-             subtitle:@"Override reported device name"
-                 icon:@"pencil.line"
-                color:[UIColor systemPurpleColor]
-                  key:@"spoofDeviceName"];
-    _deviceNameToggle.isOn = _spoofDeviceName;
-    _deviceNameToggle.delegate = self;
-
-    _customDeviceNameContainer = [[UIView alloc] init];
-    _customDeviceNameContainer.translatesAutoresizingMaskIntoConstraints = NO;
-    _customDeviceNameContainer.hidden = !_spoofDeviceName;
-
-    _customDeviceNameField = [self createStyledTextFieldWithPlaceholder:@"Custom device name..." keyboardType:UIKeyboardTypeDefault];
-    if (_editingContainer.customDeviceName.length > 0) {
-        _customDeviceNameField.text = _editingContainer.customDeviceName;
-    }
-    [_customDeviceNameContainer addSubview:_customDeviceNameField];
-
-    [NSLayoutConstraint activateConstraints:@[
-        [_customDeviceNameField.topAnchor constraintEqualToAnchor:_customDeviceNameContainer.topAnchor constant:4],
-        [_customDeviceNameField.leadingAnchor constraintEqualToAnchor:_customDeviceNameContainer.leadingAnchor constant:16],
-        [_customDeviceNameField.trailingAnchor constraintEqualToAnchor:_customDeviceNameContainer.trailingAnchor constant:-16],
-        [_customDeviceNameField.heightAnchor constraintEqualToConstant:44],
-        [_customDeviceNameField.bottomAnchor constraintEqualToAnchor:_customDeviceNameContainer.bottomAnchor constant:-8],
-    ]];
-
-    // Finalize bottom constraint of device card container
-    // The iOS version button is the last element before the device name toggle
-    [_iosVersionButton.bottomAnchor constraintEqualToAnchor:_deviceCardContainer.bottomAnchor constant:-12].active = YES;
-
-    [section addCellView:_deviceCardContainer];
-    [section addCellView:_deviceNameToggle];
-    [section addCellView:_customDeviceNameContainer];
-
-    [_step2Stack addArrangedSubview:section];
-
-    // Populate initial values
-    [self updateDeviceCardUI];
-    [self rebuildStoragePills];
-    [self updateIOSVersionButtonTitle];
-}
-
-- (void)updateDeviceCardUI {
-    if (_selectedDeviceIndex >= (NSInteger)_deviceList.count) return;
-
-    MiOSDeviceModel *device = _deviceList[_selectedDeviceIndex];
-
-    // Rendered device image
-    _deviceIconView.image = [MiOSDeviceImageRenderer renderDeviceForName:device.displayName
-                                                                    size:CGSizeMake(80, 100)
-                                                             accentColor:[MiOSTheme accentColor]];
-
-    // Name and identifier
-    _deviceNameLabel.text = device.displayName;
-    _deviceIdentifierLabel.text = device.identifier;
-
-    // Specs
-    NSString *specs = [NSString stringWithFormat:@"%@ | %ld GB RAM | %ld Cores",
-                       device.chipName ?: @"Unknown",
-                       (long)device.ramGB,
-                       (long)device.cpuCores];
-    _deviceSpecsLabel.text = specs;
-}
-
-- (void)rebuildStoragePills {
-    UIScrollView *scrollView = [_storagePillContainer viewWithTag:500];
-    for (UIView *v in scrollView.subviews) {
-        [v removeFromSuperview];
-    }
-
-    if (_selectedDeviceIndex >= (NSInteger)_deviceList.count) return;
-
-    MiOSDeviceModel *device = _deviceList[_selectedDeviceIndex];
-    NSArray<NSNumber *> *options = device.storageOptions;
-    if (!options || options.count == 0) return;
-
-    // Clamp selected index
-    if (_selectedStorageIndex >= (NSInteger)options.count) {
-        _selectedStorageIndex = 0;
-    }
-
-    CGFloat x = 0;
-    CGFloat pillHeight = 32;
-    CGFloat spacing = 8;
-
-    for (NSInteger i = 0; i < (NSInteger)options.count; i++) {
-        NSInteger gb = options[i].integerValue;
-        NSString *title = [NSString stringWithFormat:@"%ldGB", (long)gb];
-
-        UIButton *pill = [UIButton buttonWithType:UIButtonTypeSystem];
-        pill.tag = 600 + i;
-        [pill setTitle:title forState:UIControlStateNormal];
-        pill.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
-        pill.layer.cornerRadius = pillHeight / 2.0;
-        pill.layer.cornerCurve = kCACornerCurveContinuous;
-        pill.contentEdgeInsets = UIEdgeInsetsMake(0, 16, 0, 16);
-        [pill addTarget:self action:@selector(storagePillTapped:) forControlEvents:UIControlEventTouchUpInside];
-
-        if (i == _selectedStorageIndex) {
-            pill.backgroundColor = [MiOSTheme accentColor];
-            [pill setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        } else {
-            pill.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.12];
-            [pill setTitleColor:[MiOSTheme accentColor] forState:UIControlStateNormal];
-        }
-
-        CGFloat w = MAX([pill sizeThatFits:CGSizeMake(CGFLOAT_MAX, pillHeight)].width, 64);
-        pill.frame = CGRectMake(x, 3, w, pillHeight);
-        [scrollView addSubview:pill];
-        x += w + spacing;
-    }
-
-    scrollView.contentSize = CGSizeMake(MAX(x - spacing, 0), pillHeight + 6);
-}
-
-- (void)storagePillTapped:(UIButton *)sender {
-    NSInteger idx = sender.tag - 600;
-    _selectedStorageIndex = idx;
-
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [haptic impactOccurred];
-
-    [self rebuildStoragePills];
-}
-
-- (void)updateIOSVersionButtonTitle {
-    NSString *ver = @"Select...";
-    if (_selectedIOSIndex < (NSInteger)_iosVersionList.count) {
-        ver = [NSString stringWithFormat:@"iOS %@", _iosVersionList[_selectedIOSIndex]];
-    }
-    [_iosVersionButton setTitle:ver forState:UIControlStateNormal];
-}
-
-- (void)iosVersionButtonTapped {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Select iOS Version"
-                                                                  message:nil
-                                                           preferredStyle:UIAlertControllerStyleActionSheet];
-
-    for (NSInteger i = 0; i < (NSInteger)_iosVersionList.count; i++) {
-        NSString *ver = _iosVersionList[i];
-        NSString *title = [NSString stringWithFormat:@"iOS %@", ver];
-        if (i == _selectedIOSIndex) {
-            title = [NSString stringWithFormat:@"iOS %@ (current)", ver];
-        }
-        __weak typeof(self) weakSelf = self;
-        NSInteger idx = i;
-        [alert addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-            weakSelf.selectedIOSIndex = idx;
-            [weakSelf updateIOSVersionButtonTitle];
-            UIImpactFeedbackGenerator *h = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-            [h impactOccurred];
-        }]];
-    }
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-
-    if (alert.popoverPresentationController) {
-        alert.popoverPresentationController.sourceView = _iosVersionButton;
-        alert.popoverPresentationController.sourceRect = _iosVersionButton.bounds;
-    }
-
-    [self presentViewController:alert animated:YES completion:nil];
-}
-
-- (void)prevDeviceTapped {
-    if (_deviceList.count == 0) return;
-    _selectedDeviceIndex--;
-    if (_selectedDeviceIndex < 0) {
-        _selectedDeviceIndex = (NSInteger)_deviceList.count - 1;
-    }
-    [self deviceSelectionChanged];
-}
-
-- (void)nextDeviceTapped {
-    if (_deviceList.count == 0) return;
-    _selectedDeviceIndex++;
-    if (_selectedDeviceIndex >= (NSInteger)_deviceList.count) {
-        _selectedDeviceIndex = 0;
-    }
-    [self deviceSelectionChanged];
-}
-
-- (void)deviceSelectionChanged {
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [haptic impactOccurred];
-
-    [self updateIOSVersionsForDeviceQuiet];
-    _selectedStorageIndex = 0;
-    [self updateDeviceCardUI];
-    [self rebuildStoragePills];
-    [self updateIOSVersionButtonTitle];
-}
-
-- (void)chooseDeviceTapped {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Choose Device"
-                                                                  message:nil
-                                                           preferredStyle:UIAlertControllerStyleActionSheet];
-
-    __weak typeof(self) weakSelf = self;
-    for (NSInteger i = 0; i < (NSInteger)_deviceList.count; i++) {
-        MiOSDeviceModel *dev = _deviceList[i];
-        NSString *title = dev.displayName;
-        if (i == _selectedDeviceIndex) {
-            title = [NSString stringWithFormat:@"%@ (current)", dev.displayName];
-        }
-        NSInteger idx = i;
-        [alert addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-            weakSelf.selectedDeviceIndex = idx;
-            [weakSelf deviceSelectionChanged];
-        }]];
-    }
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-
-    if (alert.popoverPresentationController) {
-        alert.popoverPresentationController.sourceView = _deviceNavContainer;
-        alert.popoverPresentationController.sourceRect = _deviceNavContainer.bounds;
-    }
-
-    [self presentViewController:alert animated:YES completion:nil];
 }
 
 #pragma mark - Identifiers Section
@@ -1453,65 +949,55 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 - (void)buildIdentifiersSection {
     MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@"Identity & Privacy"];
 
-    // DeviceCheck
-    MiOSToggleCell *deviceCheckCell = [[MiOSToggleCell alloc]
-        initWithTitle:@"DeviceCheck Bypass"
-             subtitle:@"Block DeviceCheck token generation"
-                 icon:@"checkmark.shield.fill"
-                color:[UIColor systemRedColor]
-                  key:@"spoofDeviceCheck"];
+    MiOSToggleCell *deviceCheckCell = [[MiOSToggleCell alloc] initWithTitle:@"DeviceCheck Bypass"
+                                                                    subtitle:@"Block DeviceCheck token generation"
+                                                                        icon:@"checkmark.shield.fill"
+                                                                       color:[UIColor systemRedColor]
+                                                                         key:@"spoofDeviceCheck"];
     deviceCheckCell.isOn = _spoofDeviceCheck;
     deviceCheckCell.delegate = self;
     [section addCellView:deviceCheckCell];
     [section addSeparator];
 
-    // Vendor ID
-    MiOSToggleCell *vendorCell = [[MiOSToggleCell alloc]
-        initWithTitle:@"Vendor ID Spoof"
-             subtitle:@"Spoof identifierForVendor"
-                 icon:@"person.badge.key.fill"
-                color:[UIColor systemIndigoColor]
-                  key:@"spoofVendorID"];
+    MiOSToggleCell *vendorCell = [[MiOSToggleCell alloc] initWithTitle:@"Vendor ID Spoof"
+                                                               subtitle:@"Spoof identifierForVendor"
+                                                                   icon:@"person.badge.key.fill"
+                                                                  color:[UIColor systemIndigoColor]
+                                                                    key:@"spoofVendorID"];
     vendorCell.isOn = _spoofVendorID;
     vendorCell.delegate = self;
     [section addCellView:vendorCell];
 
     UILabel *vendorLabelOut = nil;
-    _vendorIDContainer = [self buildUUIDRowWithValue:_vendorID ?: @"Not generated"
-                                           labelOut:&vendorLabelOut
-                                        generateSel:@selector(generateVendorID)];
+    _vendorIDContainer = [self buildUUIDRowWithValue:_vendorID ?: @"Not generated" labelOut:&vendorLabelOut
+                                         generateSel:@selector(generateVendorID)];
     _vendorIDLabel = vendorLabelOut;
     _vendorIDContainer.hidden = !_spoofVendorID;
     [section addCellView:_vendorIDContainer];
     [section addSeparator];
 
-    // Advertising ID
-    MiOSToggleCell *adCell = [[MiOSToggleCell alloc]
-        initWithTitle:@"Advertising ID Spoof"
-             subtitle:@"Spoof advertisingIdentifier"
-                 icon:@"megaphone.fill"
-                color:[UIColor systemOrangeColor]
-                  key:@"spoofAdvertisingID"];
+    MiOSToggleCell *adCell = [[MiOSToggleCell alloc] initWithTitle:@"Advertising ID Spoof"
+                                                           subtitle:@"Spoof advertisingIdentifier"
+                                                               icon:@"megaphone.fill"
+                                                              color:[UIColor systemOrangeColor]
+                                                                key:@"spoofAdvertisingID"];
     adCell.isOn = _spoofAdvertisingID;
     adCell.delegate = self;
     [section addCellView:adCell];
 
     UILabel *adLabelOut = nil;
-    _advertisingIDContainer = [self buildUUIDRowWithValue:_advertisingID ?: @"Not generated"
-                                               labelOut:&adLabelOut
-                                            generateSel:@selector(generateAdvertisingID)];
+    _advertisingIDContainer = [self buildUUIDRowWithValue:_advertisingID ?: @"Not generated" labelOut:&adLabelOut
+                                              generateSel:@selector(generateAdvertisingID)];
     _advertisingIDLabel = adLabelOut;
     _advertisingIDContainer.hidden = !_spoofAdvertisingID;
     [section addCellView:_advertisingIDContainer];
     [section addSeparator];
 
-    // iCloud Token
-    MiOSToggleCell *cloudCell = [[MiOSToggleCell alloc]
-        initWithTitle:@"iCloud Token Spoof"
-             subtitle:@"Return nil for ubiquityIdentityToken"
-                 icon:@"icloud.slash.fill"
-                color:[UIColor systemGrayColor]
-                  key:@"spoofCloudToken"];
+    MiOSToggleCell *cloudCell = [[MiOSToggleCell alloc] initWithTitle:@"iCloud Token Spoof"
+                                                              subtitle:@"Return nil for ubiquityIdentityToken"
+                                                                  icon:@"icloud.slash.fill"
+                                                                 color:[UIColor systemGrayColor]
+                                                                   key:@"spoofCloudToken"];
     cloudCell.isOn = _spoofCloudToken;
     cloudCell.delegate = self;
     [section addCellView:cloudCell];
@@ -1523,12 +1009,11 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     UIView *row = [[UIView alloc] init];
     row.translatesAutoresizingMaskIntoConstraints = NO;
 
-    UILabel *valueLabel = [[UILabel alloc] init];
-    valueLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    UILabel *valueLabel = [self labelWithFont:[UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular]
+                                        color:[MiOSTheme secondaryText]];
     valueLabel.text = value;
-    valueLabel.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
-    valueLabel.textColor = [MiOSTheme secondaryText];
     valueLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    [valueLabel setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
     [row addSubview:valueLabel];
     if (outLabel) *outLabel = valueLabel;
 
@@ -1537,8 +1022,8 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     [genBtn setTitle:@"Generate" forState:UIControlStateNormal];
     genBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
     [genBtn setTitleColor:[MiOSTheme accentColor] forState:UIControlStateNormal];
-    genBtn.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.12];
-    genBtn.layer.cornerRadius = 8;
+    genBtn.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.14];
+    genBtn.layer.cornerRadius = 12;
     genBtn.layer.cornerCurve = kCACornerCurveContinuous;
     genBtn.contentEdgeInsets = UIEdgeInsetsMake(6, 14, 6, 14);
     [genBtn addTarget:self action:sel forControlEvents:UIControlEventTouchUpInside];
@@ -1546,91 +1031,441 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 
     [NSLayoutConstraint activateConstraints:@[
         [row.heightAnchor constraintEqualToConstant:44],
-        [valueLabel.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:16],
+        [valueLabel.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:54],
         [valueLabel.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
         [valueLabel.trailingAnchor constraintLessThanOrEqualToAnchor:genBtn.leadingAnchor constant:-8],
-        [genBtn.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-16],
+        [genBtn.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-12],
         [genBtn.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
     ]];
-
     return row;
 }
 
 - (void)generateVendorID {
     _vendorID = [[NSUUID UUID] UUIDString];
     _vendorIDLabel.text = _vendorID;
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [haptic impactOccurred];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
 }
 
 - (void)generateAdvertisingID {
     _advertisingID = [[NSUUID UUID] UUIDString];
     _advertisingIDLabel.text = _advertisingID;
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [haptic impactOccurred];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
 }
 
-#pragma mark - Save Button
+#pragma mark - Device Section
+
+- (UIView *)specPillWithIcon:(NSString *)icon label:(UILabel *)label accessory:(NSString *)accessory {
+    UIView *pill = [[UIView alloc] init];
+    pill.translatesAutoresizingMaskIntoConstraints = NO;
+    pill.backgroundColor = [UIColor colorWithWhite:1 alpha:0.07];
+    pill.layer.cornerRadius = 12;
+    pill.layer.cornerCurve = kCACornerCurveContinuous;
+    pill.layer.borderWidth = 1.0;
+    pill.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.08].CGColor;
+
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightSemibold];
+    UIImageView *iv = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:icon withConfiguration:cfg]];
+    iv.translatesAutoresizingMaskIntoConstraints = NO;
+    iv.tintColor = [MiOSTheme secondaryText];
+    iv.contentMode = UIViewContentModeCenter;
+    [pill addSubview:iv];
+
+    label.adjustsFontSizeToFitWidth = YES;
+    label.minimumScaleFactor = 0.7;
+    [pill addSubview:label];
+
+    NSMutableArray *constraints = [@[
+        [iv.leadingAnchor constraintEqualToAnchor:pill.leadingAnchor constant:10],
+        [iv.centerYAnchor constraintEqualToAnchor:pill.centerYAnchor],
+        [iv.widthAnchor constraintEqualToConstant:18],
+        [label.leadingAnchor constraintEqualToAnchor:iv.trailingAnchor constant:8],
+        [label.centerYAnchor constraintEqualToAnchor:pill.centerYAnchor],
+    ] mutableCopy];
+
+    if (accessory) {
+        UIImageSymbolConfiguration *acfg = [UIImageSymbolConfiguration configurationWithPointSize:10 weight:UIImageSymbolWeightBold];
+        UIImageView *acc = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:accessory withConfiguration:acfg]];
+        acc.translatesAutoresizingMaskIntoConstraints = NO;
+        acc.tintColor = [MiOSTheme accentColor];
+        [pill addSubview:acc];
+        [constraints addObjectsFromArray:@[
+            [acc.trailingAnchor constraintEqualToAnchor:pill.trailingAnchor constant:-10],
+            [acc.centerYAnchor constraintEqualToAnchor:pill.centerYAnchor],
+            [label.trailingAnchor constraintLessThanOrEqualToAnchor:acc.leadingAnchor constant:-6],
+        ]];
+    } else {
+        [constraints addObject:[label.trailingAnchor constraintLessThanOrEqualToAnchor:pill.trailingAnchor constant:-10]];
+    }
+    [NSLayoutConstraint activateConstraints:constraints];
+    return pill;
+}
+
+- (UIView *)pickerTileWithBadge:(UIView *)badge title:(UILabel *)title subtitle:(NSString *)subtitle action:(SEL)action {
+    UIView *tile = [[UIView alloc] init];
+    tile.translatesAutoresizingMaskIntoConstraints = NO;
+    tile.backgroundColor = [UIColor colorWithWhite:1 alpha:0.07];
+    tile.layer.cornerRadius = 16;
+    tile.layer.cornerCurve = kCACornerCurveContinuous;
+    tile.layer.borderWidth = 1.0;
+    tile.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.08].CGColor;
+
+    badge.translatesAutoresizingMaskIntoConstraints = NO;
+    [tile addSubview:badge];
+
+    title.adjustsFontSizeToFitWidth = YES;
+    title.minimumScaleFactor = 0.7;
+    [tile addSubview:title];
+
+    UILabel *sub = [self labelWithFont:[UIFont systemFontOfSize:11 weight:UIFontWeightMedium] color:[MiOSTheme secondaryText]];
+    sub.text = subtitle;
+    [tile addSubview:sub];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [badge.leadingAnchor constraintEqualToAnchor:tile.leadingAnchor constant:10],
+        [badge.centerYAnchor constraintEqualToAnchor:tile.centerYAnchor],
+        [badge.widthAnchor constraintEqualToConstant:40],
+        [badge.heightAnchor constraintEqualToConstant:40],
+        [title.leadingAnchor constraintEqualToAnchor:badge.trailingAnchor constant:10],
+        [title.trailingAnchor constraintLessThanOrEqualToAnchor:tile.trailingAnchor constant:-8],
+        [title.bottomAnchor constraintEqualToAnchor:tile.centerYAnchor constant:-1],
+        [sub.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+        [sub.trailingAnchor constraintLessThanOrEqualToAnchor:tile.trailingAnchor constant:-8],
+        [sub.topAnchor constraintEqualToAnchor:tile.centerYAnchor constant:2],
+    ]];
+
+    [tile addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:action]];
+    return tile;
+}
+
+- (void)buildDeviceSection {
+    MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@"Device Spoofing"];
+    UIColor *accent = [MiOSTheme accentColor];
+
+    MiOSToggleCell *deviceToggle = [[MiOSToggleCell alloc] initWithTitle:@"Enable Device Spoof"
+                                                                 subtitle:@"Spoof device model and iOS version"
+                                                                     icon:@"iphone.gen3"
+                                                                    color:[UIColor systemTealColor]
+                                                                      key:@"deviceSpoofEnabled"];
+    deviceToggle.isOn = _deviceSpoofEnabled;
+    deviceToggle.delegate = self;
+    [section addCellView:deviceToggle];
+
+    _deviceCardContainer = [[UIView alloc] init];
+    _deviceCardContainer.translatesAutoresizingMaskIntoConstraints = NO;
+    _deviceCardContainer.hidden = !_deviceSpoofEnabled;
+
+    MiOSGradientView *card = [[MiOSGradientView alloc] init];
+    card.translatesAutoresizingMaskIntoConstraints = NO;
+    [card setColors:@[MiOSMix([MiOSTheme tileBackground], accent, 0.30),
+                      MiOSMix([MiOSTheme tileBackground], [MiOSTheme accentGradientEnd], 0.12)]
+              start:CGPointMake(0, 0) end:CGPointMake(1, 1)];
+    card.layer.cornerRadius = 22;
+    card.layer.cornerCurve = kCACornerCurveContinuous;
+    card.layer.borderWidth = 1.0;
+    card.layer.borderColor = [accent colorWithAlphaComponent:0.30].CGColor;
+    card.clipsToBounds = YES;
+    [_deviceCardContainer addSubview:card];
+
+    _deviceImageView = [[UIImageView alloc] init];
+    _deviceImageView.translatesAutoresizingMaskIntoConstraints = NO;
+    _deviceImageView.contentMode = UIViewContentModeScaleAspectFit;
+    _deviceImageView.userInteractionEnabled = YES;
+    [_deviceImageView addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(chooseDeviceTapped)]];
+    UISwipeGestureRecognizer *swipeLeft = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(nextDeviceTapped)];
+    swipeLeft.direction = UISwipeGestureRecognizerDirectionLeft;
+    [_deviceImageView addGestureRecognizer:swipeLeft];
+    UISwipeGestureRecognizer *swipeRight = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(prevDeviceTapped)];
+    swipeRight.direction = UISwipeGestureRecognizerDirectionRight;
+    [_deviceImageView addGestureRecognizer:swipeRight];
+    [card addSubview:_deviceImageView];
+
+    UIFont *pillFont = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    _deviceNameValue = [self labelWithFont:[UIFont systemFontOfSize:13 weight:UIFontWeightSemibold] color:[MiOSTheme primaryText]];
+    _deviceIdentifierValue = [self labelWithFont:pillFont color:[MiOSTheme primaryText]];
+    _deviceChipValue = [self labelWithFont:pillFont color:[MiOSTheme primaryText]];
+    _deviceMemoryValue = [self labelWithFont:pillFont color:[MiOSTheme primaryText]];
+
+    UIView *namePill = [self specPillWithIcon:@"iphone" label:_deviceNameValue accessory:@"chevron.up.chevron.down"];
+    [namePill addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(chooseDeviceTapped)]];
+
+    UIStackView *pills = [[UIStackView alloc] initWithArrangedSubviews:@[
+        namePill,
+        [self specPillWithIcon:@"number" label:_deviceIdentifierValue accessory:nil],
+        [self specPillWithIcon:@"cpu" label:_deviceChipValue accessory:nil],
+        [self specPillWithIcon:@"memorychip" label:_deviceMemoryValue accessory:nil],
+    ]];
+    pills.translatesAutoresizingMaskIntoConstraints = NO;
+    pills.axis = UILayoutConstraintAxisVertical;
+    pills.spacing = 8;
+    pills.distribution = UIStackViewDistributionFillEqually;
+    [card addSubview:pills];
+
+    // iOS version tile with an iOS-style numbered badge.
+    MiOSGradientView *iosBadge = [[MiOSGradientView alloc] init];
+    [iosBadge setColors:@[accent, [MiOSTheme accentGradientEnd]] start:CGPointMake(0, 0) end:CGPointMake(1, 1)];
+    iosBadge.layer.cornerRadius = 11;
+    iosBadge.layer.cornerCurve = kCACornerCurveContinuous;
+    iosBadge.clipsToBounds = YES;
+    _iosBadgeLabel = [self labelWithFont:[UIFont systemFontOfSize:18 weight:UIFontWeightBold] color:[MiOSTheme textColorOnAccent]];
+    _iosBadgeLabel.textAlignment = NSTextAlignmentCenter;
+    [iosBadge addSubview:_iosBadgeLabel];
+    [NSLayoutConstraint activateConstraints:@[
+        [_iosBadgeLabel.centerXAnchor constraintEqualToAnchor:iosBadge.centerXAnchor],
+        [_iosBadgeLabel.centerYAnchor constraintEqualToAnchor:iosBadge.centerYAnchor],
+    ]];
+    _iosTitleLabel = [self labelWithFont:[UIFont systemFontOfSize:15 weight:UIFontWeightSemibold] color:[MiOSTheme primaryText]];
+    _iosTile = [self pickerTileWithBadge:iosBadge title:_iosTitleLabel subtitle:@"Choose Version" action:@selector(iosVersionButtonTapped)];
+
+    UIView *storageBadge = [[UIView alloc] init];
+    storageBadge.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+    storageBadge.layer.cornerRadius = 11;
+    storageBadge.layer.cornerCurve = kCACornerCurveContinuous;
+    UIImageSymbolConfiguration *driveCfg = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightSemibold];
+    UIImageView *drive = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"internaldrive.fill" withConfiguration:driveCfg]];
+    drive.translatesAutoresizingMaskIntoConstraints = NO;
+    drive.tintColor = [UIColor colorWithWhite:1 alpha:0.9];
+    [storageBadge addSubview:drive];
+    [NSLayoutConstraint activateConstraints:@[
+        [drive.centerXAnchor constraintEqualToAnchor:storageBadge.centerXAnchor],
+        [drive.centerYAnchor constraintEqualToAnchor:storageBadge.centerYAnchor],
+    ]];
+    _storageTitleLabel = [self labelWithFont:[UIFont systemFontOfSize:15 weight:UIFontWeightSemibold] color:[MiOSTheme primaryText]];
+    _storageTile = [self pickerTileWithBadge:storageBadge title:_storageTitleLabel subtitle:@"Choose Storage" action:@selector(storageTapped)];
+
+    UIStackView *pickers = [[UIStackView alloc] initWithArrangedSubviews:@[_iosTile, _storageTile]];
+    pickers.translatesAutoresizingMaskIntoConstraints = NO;
+    pickers.axis = UILayoutConstraintAxisHorizontal;
+    pickers.spacing = 10;
+    pickers.distribution = UIStackViewDistributionFillEqually;
+    [card addSubview:pickers];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [card.topAnchor constraintEqualToAnchor:_deviceCardContainer.topAnchor constant:4],
+        [card.leadingAnchor constraintEqualToAnchor:_deviceCardContainer.leadingAnchor constant:12],
+        [card.trailingAnchor constraintEqualToAnchor:_deviceCardContainer.trailingAnchor constant:-12],
+        [card.bottomAnchor constraintEqualToAnchor:_deviceCardContainer.bottomAnchor constant:-12],
+
+        [pills.topAnchor constraintEqualToAnchor:card.topAnchor constant:14],
+        [pills.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-12],
+        [pills.widthAnchor constraintEqualToAnchor:card.widthAnchor multiplier:0.52],
+        [pills.heightAnchor constraintEqualToConstant:34 * 4 + 8 * 3],
+
+        [_deviceImageView.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:6],
+        [_deviceImageView.trailingAnchor constraintEqualToAnchor:pills.leadingAnchor constant:-6],
+        [_deviceImageView.centerYAnchor constraintEqualToAnchor:pills.centerYAnchor],
+        [_deviceImageView.heightAnchor constraintEqualToConstant:156],
+
+        [pickers.topAnchor constraintEqualToAnchor:pills.bottomAnchor constant:14],
+        [pickers.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:12],
+        [pickers.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-12],
+        [pickers.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-12],
+        [pickers.heightAnchor constraintEqualToConstant:62],
+    ]];
+
+    [section addCellView:_deviceCardContainer];
+    [section addSeparator];
+
+    MiOSToggleCell *nameToggle = [[MiOSToggleCell alloc] initWithTitle:@"Custom Device Name"
+                                                               subtitle:@"Override reported device name"
+                                                                   icon:@"pencil.line"
+                                                                  color:[UIColor systemPurpleColor]
+                                                                    key:@"spoofDeviceName"];
+    nameToggle.isOn = _spoofDeviceName;
+    nameToggle.delegate = self;
+    [section addCellView:nameToggle];
+
+    _customDeviceNameContainer = [[UIView alloc] init];
+    _customDeviceNameContainer.translatesAutoresizingMaskIntoConstraints = NO;
+    _customDeviceNameContainer.hidden = !_spoofDeviceName;
+    _customDeviceNameField = [self pillFieldWithPlaceholder:@"Custom device name" icon:@"character.cursor.ibeam"];
+    _customDeviceNameField.text = _customDeviceNameText;
+    [_customDeviceNameField addTarget:self action:@selector(customNameChanged:) forControlEvents:UIControlEventEditingChanged];
+    [_customDeviceNameContainer addSubview:_customDeviceNameField];
+    [NSLayoutConstraint activateConstraints:@[
+        [_customDeviceNameField.topAnchor constraintEqualToAnchor:_customDeviceNameContainer.topAnchor constant:2],
+        [_customDeviceNameField.leadingAnchor constraintEqualToAnchor:_customDeviceNameContainer.leadingAnchor constant:12],
+        [_customDeviceNameField.trailingAnchor constraintEqualToAnchor:_customDeviceNameContainer.trailingAnchor constant:-12],
+        [_customDeviceNameField.heightAnchor constraintEqualToConstant:46],
+        [_customDeviceNameField.bottomAnchor constraintEqualToAnchor:_customDeviceNameContainer.bottomAnchor constant:-12],
+    ]];
+    [section addCellView:_customDeviceNameContainer];
+
+    [_step2Stack addArrangedSubview:section];
+    [self updateDeviceCardUIAnimated:NO];
+}
+
+- (void)customNameChanged:(UITextField *)field {
+    _customDeviceNameText = field.text;
+}
+
+- (void)updateDeviceCardUIAnimated:(BOOL)animated {
+    if (_selectedDeviceIndex >= (NSInteger)_deviceList.count) return;
+    MiOSDeviceModel *device = _deviceList[_selectedDeviceIndex];
+
+    UIImage *render = [MiOSDeviceImageRenderer renderDeviceForName:device.displayName
+                                                              size:CGSizeMake(150, 156)
+                                                       accentColor:[MiOSTheme accentColor]];
+    if (animated) {
+        [UIView transitionWithView:_deviceImageView duration:0.25 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
+            self.deviceImageView.image = render;
+        } completion:nil];
+    } else {
+        _deviceImageView.image = render;
+    }
+
+    _deviceNameValue.text = device.displayName;
+    _deviceIdentifierValue.text = device.identifier;
+    _deviceChipValue.text = device.chipName.length > 0 ? device.chipName : @"Unknown chip";
+    _deviceMemoryValue.text = [NSString stringWithFormat:@"%ld GB RAM · %ld cores", (long)device.ramGB, (long)device.cpuCores];
+
+    NSString *version = _selectedIOSIndex < (NSInteger)_iosVersionList.count ? _iosVersionList[_selectedIOSIndex] : @"";
+    _iosTitleLabel.text = version.length > 0 ? [NSString stringWithFormat:@"iOS %@", version] : @"iOS";
+    _iosBadgeLabel.text = [version componentsSeparatedByString:@"."].firstObject ?: @"";
+
+    NSArray<NSNumber *> *options = device.storageOptions;
+    if (_selectedStorageIndex >= (NSInteger)options.count) _selectedStorageIndex = 0;
+    _storageTitleLabel.text = options.count > 0 ? [self storageTitle:options[_selectedStorageIndex].integerValue] : @"—";
+}
+
+- (NSString *)storageTitle:(NSInteger)gb {
+    if (gb >= 1024 && gb % 1024 == 0) return [NSString stringWithFormat:@"%ld TB", (long)(gb / 1024)];
+    return [NSString stringWithFormat:@"%ld GB", (long)gb];
+}
+
+- (void)presentSheet:(UIAlertController *)sheet from:(UIView *)source {
+    if (sheet.popoverPresentationController) {
+        sheet.popoverPresentationController.sourceView = source;
+        sheet.popoverPresentationController.sourceRect = source.bounds;
+    }
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)storageTapped {
+    MiOSDeviceModel *device = _deviceList[_selectedDeviceIndex];
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Choose Storage" message:device.displayName
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+    __weak typeof(self) weakSelf = self;
+    for (NSInteger i = 0; i < (NSInteger)device.storageOptions.count; i++) {
+        NSString *title = [self storageTitle:device.storageOptions[i].integerValue];
+        if (i == _selectedStorageIndex) title = [title stringByAppendingString:@"  ✓"];
+        [sheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+            weakSelf.selectedStorageIndex = i;
+            [weakSelf updateDeviceCardUIAnimated:NO];
+            [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentSheet:sheet from:_storageTile];
+}
+
+- (void)iosVersionButtonTapped {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Choose iOS Version"
+                                                                   message:_deviceList[_selectedDeviceIndex].displayName
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+    __weak typeof(self) weakSelf = self;
+    for (NSInteger i = 0; i < (NSInteger)_iosVersionList.count; i++) {
+        NSString *title = [NSString stringWithFormat:@"iOS %@", _iosVersionList[i]];
+        if (i == _selectedIOSIndex) title = [title stringByAppendingString:@"  ✓"];
+        [sheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+            weakSelf.selectedIOSIndex = i;
+            [weakSelf updateDeviceCardUIAnimated:NO];
+            [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentSheet:sheet from:_iosTile];
+}
+
+- (void)chooseDeviceTapped {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Choose Device" message:nil
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+    __weak typeof(self) weakSelf = self;
+    for (NSInteger i = (NSInteger)_deviceList.count - 1; i >= 0; i--) {
+        NSString *title = _deviceList[i].displayName;
+        if (i == _selectedDeviceIndex) title = [title stringByAppendingString:@"  ✓"];
+        [sheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+            weakSelf.selectedDeviceIndex = i;
+            [weakSelf deviceSelectionChanged];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentSheet:sheet from:_deviceImageView];
+}
+
+- (void)prevDeviceTapped {
+    if (_deviceList.count == 0) return;
+    _selectedDeviceIndex = (_selectedDeviceIndex - 1 + (NSInteger)_deviceList.count) % (NSInteger)_deviceList.count;
+    [self deviceSelectionChanged];
+}
+
+- (void)nextDeviceTapped {
+    if (_deviceList.count == 0) return;
+    _selectedDeviceIndex = (_selectedDeviceIndex + 1) % (NSInteger)_deviceList.count;
+    [self deviceSelectionChanged];
+}
+
+- (void)deviceSelectionChanged {
+    [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
+    [self updateIOSVersionsForDeviceQuiet];
+    _selectedStorageIndex = 0;
+    [self updateDeviceCardUIAnimated:YES];
+}
+
+- (void)updateIOSVersionsForDeviceQuiet {
+    if (_selectedDeviceIndex < (NSInteger)_deviceList.count) {
+        _iosVersionList = [MiOSDeviceDatabase supportedIOSVersionsForDevice:_deviceList[_selectedDeviceIndex]];
+    } else {
+        _iosVersionList = [MiOSDeviceDatabase allIOSVersions];
+    }
+    if (_selectedIOSIndex >= (NSInteger)_iosVersionList.count) _selectedIOSIndex = 0;
+}
+
+#pragma mark - Save
 
 - (void)buildSaveButton {
-    UIButton *saveBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    saveBtn.translatesAutoresizingMaskIntoConstraints = NO;
-    [saveBtn setTitle:@"Save Container" forState:UIControlStateNormal];
-    [saveBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    saveBtn.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
-    saveBtn.layer.cornerRadius = 16;
-    saveBtn.layer.cornerCurve = kCACornerCurveContinuous;
+    MiOSPrimaryButton *saveBtn = [[MiOSPrimaryButton alloc] initWithTitle:@"Save Container" watermark:@"checkmark.seal.fill"];
     [saveBtn addTarget:self action:@selector(saveTapped) forControlEvents:UIControlEventTouchUpInside];
-    [saveBtn.heightAnchor constraintEqualToConstant:52].active = YES;
-
-    [self applyGradientToButton:saveBtn];
     [_step2Stack addArrangedSubview:saveBtn];
 }
 
 - (void)saveTapped {
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
-    [haptic impactOccurred];
-
-    MiOSContainerConfig *config = _editingContainer ?: [[MiOSContainerConfig alloc] init];
-
-    // If new, generate UUID
-    if (!_editingContainer) {
-        config.identifier = [[NSUUID UUID] UUIDString];
+    if (![self validateStep1]) {
+        [self showStep:1 animated:YES];
+        return;
     }
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy] impactOccurred];
+
+    BOOL isNew = (_editingContainer == nil);
+    MiOSContainerConfig *config = _editingContainer ?: [[MiOSContainerConfig alloc] init];
+    if (isNew) config.identifier = [[NSUUID UUID] UUIDString];
 
     config.name = [_nameField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    config.apps = [[_selectedBundleIDs allObjects] mutableCopy];
+    config.apps = [_selectedBundleIDs mutableCopy];
 
-    // GPS
     config.gpsEnabled = _gpsEnabled;
     config.latitude = _selectedLatitude;
     config.longitude = _selectedLongitude;
     config.locationName = _selectedLocationName;
 
-    // Device
     config.deviceSpoofEnabled = _deviceSpoofEnabled;
     if (_deviceSpoofEnabled && _selectedDeviceIndex < (NSInteger)_deviceList.count) {
         MiOSDeviceModel *device = _deviceList[_selectedDeviceIndex];
         config.deviceIdentifier = device.identifier;
         config.deviceName = device.displayName;
         config.hwModel = device.hwModel;
-
-        // Storage
         if (_selectedStorageIndex < (NSInteger)device.storageOptions.count) {
             config.storageSizeGB = device.storageOptions[_selectedStorageIndex].integerValue;
         }
-    }
-    if (_deviceSpoofEnabled && _selectedIOSIndex < (NSInteger)_iosVersionList.count) {
-        config.iosVersion = _iosVersionList[_selectedIOSIndex];
+        if (_selectedIOSIndex < (NSInteger)_iosVersionList.count) {
+            config.iosVersion = _iosVersionList[_selectedIOSIndex];
+        }
     }
 
-    // Custom device name
     config.spoofDeviceName = _spoofDeviceName;
-    if (_spoofDeviceName) {
-        config.customDeviceName = [_customDeviceNameField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    }
+    config.customDeviceName = _spoofDeviceName
+        ? [_customDeviceNameText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]
+        : config.customDeviceName;
 
-    // Identifiers
     config.spoofDeviceCheck = _spoofDeviceCheck;
     config.spoofVendorID = _spoofVendorID;
     config.vendorID = _vendorID;
@@ -1638,95 +1473,53 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     config.advertisingID = _advertisingID;
     config.spoofCloudToken = _spoofCloudToken;
 
-    // Apply to system
-    [config applyToSystem];
-
-    // Save to list
     NSMutableArray<MiOSContainerConfig *> *all = [[MiOSContainerConfig loadAll] mutableCopy] ?: [NSMutableArray array];
-    if (_editingContainer) {
-        for (NSUInteger i = 0; i < all.count; i++) {
-            if ([all[i].identifier isEqualToString:config.identifier]) {
-                [all replaceObjectAtIndex:i withObject:config];
-                break;
-            }
+    BOOL replaced = NO;
+    for (NSUInteger i = 0; i < all.count; i++) {
+        if ([all[i].identifier isEqualToString:config.identifier]) {
+            [all replaceObjectAtIndex:i withObject:config];
+            replaced = YES;
+            break;
         }
-    } else {
-        [all addObject:config];
     }
+    if (!replaced) [all addObject:config];
     [MiOSContainerConfig saveAll:all];
-    [MiOSContainerConfig setActiveContainerID:config.identifier];
 
-    if (_onSave) {
-        _onSave();
+    // New containers become active; edits keep the current active container.
+    NSString *activeID = [MiOSContainerConfig activeContainerID];
+    BOOL activeExists = NO;
+    for (MiOSContainerConfig *c in all) {
+        if ([c.identifier isEqualToString:activeID]) activeExists = YES;
     }
+    if (isNew || !activeExists) {
+        [MiOSContainerConfig setActiveContainerID:config.identifier];
+        activeID = config.identifier;
+    }
+    if ([activeID isEqualToString:config.identifier]) [config applyToSystem];
 
+    [MiOSAppIconProvider applyThemeForActiveContainer];
+    if (_onSave) _onSave();
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
-#pragma mark - Helper: Styled Text Field
-
-- (UITextField *)createStyledTextFieldWithPlaceholder:(NSString *)placeholder keyboardType:(UIKeyboardType)type {
-    UITextField *field = [[UITextField alloc] init];
-    field.translatesAutoresizingMaskIntoConstraints = NO;
-    field.placeholder = placeholder;
-    field.font = [MiOSTheme bodyFont];
-    field.textColor = [MiOSTheme primaryText];
-    field.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.06];
-    field.layer.cornerRadius = 10;
-    field.layer.cornerCurve = kCACornerCurveContinuous;
-    field.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
-    field.layer.borderWidth = 1.0;
-    field.keyboardType = type;
-    field.delegate = self;
-    field.returnKeyType = UIReturnKeyDone;
-
-    UIView *lpad = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 12, 44)];
-    field.leftView = lpad;
-    field.leftViewMode = UITextFieldViewModeAlways;
-    UIView *rpad = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 12, 44)];
-    field.rightView = rpad;
-    field.rightViewMode = UITextFieldViewModeAlways;
-
-    return field;
-}
-
-#pragma mark - Device Picker Helpers
-
-- (void)updateIOSVersionsForDeviceQuiet {
-    if (_selectedDeviceIndex < (NSInteger)_deviceList.count) {
-        MiOSDeviceModel *device = _deviceList[_selectedDeviceIndex];
-        _iosVersionList = [MiOSDeviceDatabase supportedIOSVersionsForDevice:device];
-    } else {
-        _iosVersionList = [MiOSDeviceDatabase allIOSVersions];
-    }
-    if (_selectedIOSIndex >= (NSInteger)_iosVersionList.count) {
-        _selectedIOSIndex = 0;
-    }
-}
-
-#pragma mark - UICollectionView DataSource
+#pragma mark - UICollectionView
 
 - (NSInteger)collectionView:(UICollectionView *)collectionView numberOfItemsInSection:(NSInteger)section {
     return (NSInteger)_filteredApps.count;
 }
 
-- (UICollectionViewCell *)collectionView:(UICollectionView *)collectionView
-                  cellForItemAtIndexPath:(NSIndexPath *)indexPath {
-    MiOSAppListCell *cell = [collectionView dequeueReusableCellWithReuseIdentifier:kAppCellReuseID
-                                                                      forIndexPath:indexPath];
+- (UICollectionViewCell *)collectionView:(UICollectionView *)collectionView cellForItemAtIndexPath:(NSIndexPath *)indexPath {
+    MiOSAppRowCell *cell = [collectionView dequeueReusableCellWithReuseIdentifier:kAppCellReuseID forIndexPath:indexPath];
     MiOSAppInfo *app = _filteredApps[indexPath.item];
     cell.iconView.image = app.icon;
     cell.nameLabel.text = app.name;
     cell.bundleLabel.text = app.bundleID;
-    cell.isChecked = [_selectedBundleIDs containsObject:app.bundleID];
+    [cell setChecked:[_selectedBundleIDs containsObject:app.bundleID]];
     return cell;
 }
 
-#pragma mark - UICollectionView Delegate
-
 - (void)collectionView:(UICollectionView *)collectionView didSelectItemAtIndexPath:(NSIndexPath *)indexPath {
     [collectionView deselectItemAtIndexPath:indexPath animated:NO];
-
     MiOSAppInfo *app = _filteredApps[indexPath.item];
     if ([_selectedBundleIDs containsObject:app.bundleID]) {
         [_selectedBundleIDs removeObject:app.bundleID];
@@ -1734,23 +1527,21 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
         [_selectedBundleIDs addObject:app.bundleID];
     }
 
-    MiOSAppListCell *cell = (MiOSAppListCell *)[collectionView cellForItemAtIndexPath:indexPath];
-    cell.isChecked = [_selectedBundleIDs containsObject:app.bundleID];
-
-    UIImpactFeedbackGenerator *h = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [h impactOccurred];
-
+    MiOSAppRowCell *cell = (MiOSAppRowCell *)[collectionView cellForItemAtIndexPath:indexPath];
+    [cell setChecked:[_selectedBundleIDs containsObject:app.bundleID]];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     [self updateNextButtonTitle];
-    [self updateDynamicAccentFromSelection];
+
+    // The first selected app drives the color scheme, live.
+    if (_selectedBundleIDs.count > 0) {
+        [MiOSAppIconProvider applyThemeForBundleIDs:_selectedBundleIDs];
+    } else {
+        [MiOSAppIconProvider applyThemeForActiveContainer];
+    }
 }
 
-#pragma mark - UICollectionViewDelegateFlowLayout
-
-- (CGSize)collectionView:(UICollectionView *)collectionView
-                  layout:(UICollectionViewLayout *)layout
-  sizeForItemAtIndexPath:(NSIndexPath *)indexPath {
-    CGFloat width = collectionView.bounds.size.width;
-    return CGSizeMake(width, 72);
+- (CGSize)collectionView:(UICollectionView *)collectionView layout:(UICollectionViewLayout *)layout sizeForItemAtIndexPath:(NSIndexPath *)indexPath {
+    return CGSizeMake(collectionView.bounds.size.width, 72);
 }
 
 #pragma mark - MiOSToggleCellDelegate
@@ -1793,68 +1584,53 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     return YES;
 }
 
-#pragma mark - UISearchBarDelegate
+#pragma mark - UISearchBarDelegate (location)
 
 - (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText {
-    if (searchBar == _appSearchBar) {
-        [self filterApps];
-    } else if (searchBar == _locationSearchBar) {
-        if (searchText.length == 0) {
-            _locationSearchResults = @[];
-            _locationSearchResultsTable.hidden = YES;
-            [_locationSearchResultsTable reloadData];
-            return;
-        }
-        _searchCompleter.queryFragment = searchText;
-    }
-}
-
-- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
-    if (searchBar == _appSearchBar) {
-        [searchBar resignFirstResponder];
-    } else if (searchBar == _locationSearchBar) {
-        [searchBar resignFirstResponder];
-        _locationSearchResultsTable.hidden = YES;
-
-        NSString *query = searchBar.text;
-        if (query.length == 0) return;
-
-        MKLocalSearchRequest *request = [[MKLocalSearchRequest alloc] init];
-        request.naturalLanguageQuery = query;
-        MKLocalSearch *search = [[MKLocalSearch alloc] initWithRequest:request];
-        __weak typeof(self) weakSelf = self;
-        [search startWithCompletionHandler:^(MKLocalSearchResponse *response, NSError *error) {
-            MKMapItem *item = response.mapItems.firstObject;
-            if (!item) return;
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [weakSelf setMapLocationToCoordinate:item.placemark.coordinate];
-                weakSelf.selectedLocationName = item.name;
-                MKCoordinateRegion region = MKCoordinateRegionMakeWithDistance(item.placemark.coordinate, 5000, 5000);
-                [weakSelf.mapView setRegion:region animated:YES];
-                searchBar.text = @"";
-            });
-        }];
-    }
-}
-
-- (void)searchBarTextDidBeginEditing:(UISearchBar *)searchBar {
-    if (searchBar == _locationSearchBar) {
-        searchBar.showsCancelButton = YES;
-    }
-}
-
-- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
-    if (searchBar == _locationSearchBar) {
-        searchBar.text = @"";
-        searchBar.showsCancelButton = NO;
-        [searchBar resignFirstResponder];
+    if (searchText.length == 0) {
         _locationSearchResults = @[];
         _locationSearchResultsTable.hidden = YES;
         [_locationSearchResultsTable reloadData];
+        return;
     }
+    _searchCompleter.queryFragment = searchText;
 }
 
-#pragma mark - UITableViewDataSource / Delegate (Location Search Results)
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
+    [searchBar resignFirstResponder];
+    _locationSearchResultsTable.hidden = YES;
+    NSString *query = searchBar.text;
+    if (query.length == 0) return;
+
+    MKLocalSearchRequest *request = [[MKLocalSearchRequest alloc] init];
+    request.naturalLanguageQuery = query;
+    __weak typeof(self) weakSelf = self;
+    [[[MKLocalSearch alloc] initWithRequest:request] startWithCompletionHandler:^(MKLocalSearchResponse *response, NSError *error) {
+        MKMapItem *item = response.mapItems.firstObject;
+        if (!item) return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            weakSelf.selectedLocationName = item.name;
+            [weakSelf setMapLocationToCoordinate:item.placemark.coordinate];
+            [weakSelf.mapView setRegion:MKCoordinateRegionMakeWithDistance(item.placemark.coordinate, 5000, 5000) animated:YES];
+            searchBar.text = @"";
+        });
+    }];
+}
+
+- (void)searchBarTextDidBeginEditing:(UISearchBar *)searchBar {
+    searchBar.showsCancelButton = YES;
+}
+
+- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
+    searchBar.text = @"";
+    searchBar.showsCancelButton = NO;
+    [searchBar resignFirstResponder];
+    _locationSearchResults = @[];
+    _locationSearchResultsTable.hidden = YES;
+    [_locationSearchResultsTable reloadData];
+}
+
+#pragma mark - Location results table
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     return MIN((NSInteger)_locationSearchResults.count, 5);
@@ -1862,9 +1638,7 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"locResult"];
-    if (!cell) {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"locResult"];
-    }
+    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"locResult"];
     cell.backgroundColor = [UIColor clearColor];
     cell.textLabel.textColor = [MiOSTheme primaryText];
     cell.textLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
@@ -1874,11 +1648,9 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     MKLocalSearchCompletion *result = _locationSearchResults[indexPath.row];
     cell.textLabel.text = result.title;
     cell.detailTextLabel.text = result.subtitle;
-
     UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightMedium];
     cell.imageView.image = [UIImage systemImageNamed:@"mappin.circle.fill" withConfiguration:cfg];
     cell.imageView.tintColor = [MiOSTheme accentColor];
-
     return cell;
 }
 
@@ -1888,10 +1660,8 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     MKLocalSearchCompletion *completion = _locationSearchResults[indexPath.row];
     NSString *displayName = completion.title;
     NSString *queryString = completion.subtitle.length > 0
-        ? [NSString stringWithFormat:@"%@ %@", completion.title, completion.subtitle]
-        : completion.title;
+        ? [NSString stringWithFormat:@"%@ %@", completion.title, completion.subtitle] : completion.title;
 
-    // Dismiss the search UI immediately so the selection feels instant.
     _locationSearchBar.text = @"";
     _locationSearchBar.showsCancelButton = NO;
     [_locationSearchBar resignFirstResponder];
@@ -1902,34 +1672,24 @@ static NSString *const kAppCellReuseID = @"MiOSAppListCell";
     __weak typeof(self) weakSelf = self;
     void (^applyCoord)(CLLocationCoordinate2D) = ^(CLLocationCoordinate2D coord) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            [weakSelf setMapLocationToCoordinate:coord];
             weakSelf.selectedLocationName = displayName;
-            MKCoordinateRegion region = MKCoordinateRegionMakeWithDistance(coord, 5000, 5000);
-            [weakSelf.mapView setRegion:region animated:YES];
+            [weakSelf setMapLocationToCoordinate:coord];
+            [weakSelf.mapView setRegion:MKCoordinateRegionMakeWithDistance(coord, 5000, 5000) animated:YES];
         });
     };
 
     MKLocalSearchRequest *request = [[MKLocalSearchRequest alloc] initWithCompletion:completion];
-    MKLocalSearch *search = [[MKLocalSearch alloc] initWithRequest:request];
-    [search startWithCompletionHandler:^(MKLocalSearchResponse *response, NSError *error) {
+    [[[MKLocalSearch alloc] initWithRequest:request] startWithCompletionHandler:^(MKLocalSearchResponse *response, NSError *error) {
         MKMapItem *item = response.mapItems.firstObject;
         if (item) {
             applyCoord(item.placemark.coordinate);
             return;
         }
-        // Fallback: resolve the completion text via geocoder so a pick always sets a location.
-        CLGeocoder *geocoder = [[CLGeocoder alloc] init];
-        [geocoder geocodeAddressString:queryString completionHandler:^(NSArray<CLPlacemark *> *placemarks, NSError *geoErr) {
+        [[[CLGeocoder alloc] init] geocodeAddressString:queryString completionHandler:^(NSArray<CLPlacemark *> *placemarks, NSError *geoErr) {
             CLLocation *loc = placemarks.firstObject.location;
             if (loc) applyCoord(loc.coordinate);
         }];
     }];
-}
-
-#pragma mark - Segmented Control
-
-- (void)segmentChanged {
-    [self filterApps];
 }
 
 @end

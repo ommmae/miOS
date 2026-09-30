@@ -1,5 +1,6 @@
 #import "MiOSContainerListViewController.h"
 #import "MiOSContainerCreateViewController.h"
+#import "MiOSContainerActions.h"
 #import "../Models/MiOSContainerConfig.h"
 #import "../Views/MiOSContainerGridView.h"
 #import "../UI/MiOSTheme.h"
@@ -8,6 +9,7 @@
 @property (nonatomic, strong) UIScrollView *scrollView;
 @property (nonatomic, strong) UIStackView *mainStack;
 @property (nonatomic, strong) CAGradientLayer *bgGradientLayer;
+@property (nonatomic, weak) MiOSContainerGridView *grid;
 @end
 
 @implementation MiOSContainerListViewController
@@ -82,10 +84,32 @@
     MiOSContainerGridView *grid = [[MiOSContainerGridView alloc]
         initWithContainers:containers
                   activeID:activeID
-                     onTap:^(MiOSContainerConfig *container) {
-        [weakSelf presentEditorForContainer:container];
+                     onTap:^(MiOSContainerConfig *container, UIView *tile) {
+        [weakSelf showActionsForContainer:container from:tile];
     }];
+    _grid = grid;
     [_mainStack addArrangedSubview:grid];
+}
+
+- (void)reloadAnimated {
+    [UIView transitionWithView:_scrollView duration:0.35 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
+        [self reload];
+    } completion:nil];
+}
+
+- (void)showActionsForContainer:(MiOSContainerConfig *)container from:(UIView *)tile {
+    __weak typeof(self) weakSelf = self;
+    [MiOSContainerActions presentForContainer:container from:self sourceView:tile completion:^(MiOSContainerActionResult result) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (result == MiOSContainerActionRemoved && strongSelf.grid) {
+            [strongSelf.grid removeContainerWithID:container.identifier completion:^{
+                [weakSelf reloadAnimated];
+            }];
+        } else {
+            [strongSelf reloadAnimated];
+        }
+    }];
 }
 
 - (UIView *)buildHeaderWithCount:(NSUInteger)count {
@@ -173,7 +197,7 @@
     vc.editingContainer = container;
     __weak typeof(self) weakSelf = self;
     vc.onSave = ^{
-        [weakSelf reload];
+        [weakSelf reloadAnimated];
     };
     vc.modalPresentationStyle = UIModalPresentationPageSheet;
     [self presentViewController:vc animated:YES completion:nil];

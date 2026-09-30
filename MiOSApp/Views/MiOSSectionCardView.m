@@ -20,14 +20,18 @@
     _headerLabel = [[UILabel alloc] init];
     _headerLabel.translatesAutoresizingMaskIntoConstraints = NO;
     _headerLabel.text = [_sectionTitle uppercaseString];
-    _headerLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+    _headerLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     _headerLabel.textColor = [MiOSTheme accentColor];
     _headerLabel.hidden = (_sectionTitle.length == 0);
     [self addSubview:_headerLabel];
 
     _cardBg = [[UIView alloc] init];
     _cardBg.translatesAutoresizingMaskIntoConstraints = NO;
-    [MiOSTheme applyAccentGlassEffectToView:_cardBg];
+    _cardBg.backgroundColor = [MiOSTheme tileBackground];
+    _cardBg.layer.cornerRadius = 24;
+    _cardBg.layer.cornerCurve = kCACornerCurveContinuous;
+    _cardBg.layer.borderWidth = 1.0;
+    _cardBg.layer.borderColor = [MiOSTheme hairline].CGColor;
     [self addSubview:_cardBg];
 
     _contentStack = [[UIStackView alloc] init];
@@ -40,7 +44,7 @@
 
     [NSLayoutConstraint activateConstraints:@[
         [_headerLabel.topAnchor constraintEqualToAnchor:self.topAnchor],
-        [_headerLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:20],
+        [_headerLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:6],
         [_headerLabel.heightAnchor constraintEqualToConstant:headerHeight],
         [_cardBg.topAnchor constraintEqualToAnchor:_headerLabel.bottomAnchor constant:_sectionTitle.length > 0 ? 8 : 0],
         [_cardBg.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
@@ -81,7 +85,7 @@
 
 - (void)traitCollectionDidChange:(UITraitCollection *)prev {
     [super traitCollectionDidChange:prev];
-    _cardBg.layer.borderColor = [MiOSTheme accentBorderColor].CGColor;
+    _cardBg.layer.borderColor = [MiOSTheme hairline].CGColor;
 }
 
 @end

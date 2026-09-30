@@ -1,11 +1,50 @@
 #import "MiOSTheme.h"
 
+NSString *const MiOSThemeDidChangeNotification = @"MiOSThemeDidChangeNotification";
+
 static UIColor *_dynamicAccent = nil;
 static UIColor *_dynamicAccentEnd = nil;
 
 @implementation MiOSTheme
 
 #pragma mark - Dynamic Accent
+
++ (void)setAccent:(UIColor *)accent gradientEnd:(UIColor *)gradientEnd {
+    _dynamicAccent = accent;
+    _dynamicAccentEnd = gradientEnd;
+    [[NSNotificationCenter defaultCenter] postNotificationName:MiOSThemeDidChangeNotification object:nil];
+}
+
++ (BOOL)isLightColor:(UIColor *)color {
+    CGFloat r, g, b, a;
+    if (![color getRed:&r green:&g blue:&b alpha:&a]) return NO;
+    return (0.299 * r + 0.587 * g + 0.114 * b) > 0.68;
+}
+
++ (UIColor *)textColorOnAccent {
+    return [self isLightColor:[self accentColor]]
+        ? [UIColor colorWithRed:0.12 green:0.10 blue:0.06 alpha:1.0]
+        : [UIColor whiteColor];
+}
+
++ (CAGradientLayer *)pageBackgroundLayer {
+    CAGradientLayer *layer = [CAGradientLayer layer];
+    layer.colors = @[
+        (id)[UIColor colorWithRed:0.11 green:0.12 blue:0.19 alpha:1.0].CGColor,
+        (id)[UIColor colorWithRed:0.05 green:0.05 blue:0.09 alpha:1.0].CGColor,
+        (id)[UIColor colorWithRed:0.03 green:0.03 blue:0.05 alpha:1.0].CGColor,
+    ];
+    layer.locations = @[@0.0, @0.45, @1.0];
+    return layer;
+}
+
++ (UIColor *)tileBackground {
+    return [UIColor colorWithRed:0.14 green:0.15 blue:0.21 alpha:0.92];
+}
+
++ (UIColor *)hairline {
+    return [UIColor colorWithWhite:1.0 alpha:0.08];
+}
 
 + (void)setDynamicAccentColor:(UIColor *)color {
     _dynamicAccent = color;

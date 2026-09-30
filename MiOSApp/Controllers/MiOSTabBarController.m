@@ -6,6 +6,7 @@
 #import "MiOSSettingsViewController.h"
 #import "../Views/MiOSFloatingTabBar.h"
 #import "../UI/MiOSTheme.h"
+#import "../Utils/MiOSAppIconProvider.h"
 
 @implementation MiOSTabBarController {
     MiOSFloatingTabBar *_floatingBar;
@@ -13,6 +14,9 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [MiOSAppIconProvider applyThemeForActiveContainer];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(themeDidChange)
+                                                 name:MiOSThemeDidChangeNotification object:nil];
 
     self.viewControllers = @[
         [self wrap:[[MiOSHomeViewController alloc] init]],
@@ -35,6 +39,18 @@
         [weakSelf selectTab:index];
     };
     [self.view addSubview:_floatingBar];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)themeDidChange {
+    UIColor *accent = [MiOSTheme accentColor];
+    self.view.window.tintColor = accent;
+    for (UINavigationController *nav in self.viewControllers) {
+        if ([nav isKindOfClass:[UINavigationController class]]) nav.navigationBar.tintColor = accent;
+    }
 }
 
 - (UINavigationController *)wrap:(UIViewController *)vc {

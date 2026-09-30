@@ -1,8 +1,9 @@
 #import "MiOSHomeViewController.h"
 #import "MiOSContainerCreateViewController.h"
+#import "MiOSContainerActions.h"
+#import "MiOSLocationPickerViewController.h"
 #import "../Models/MiOSContainerConfig.h"
 #import "../UI/MiOSTheme.h"
-#import "../Utils/MiOSColorExtractor.h"
 #import "../Utils/MiOSDeviceImageRenderer.h"
 #import "../Utils/MiOSAppIconProvider.h"
 #import "../Views/MiOSGradientView.h"
@@ -17,10 +18,13 @@ static UIColor *MiOSShiftedHue(UIColor *color, CGFloat shift, CGFloat saturation
     return [UIColor colorWithHue:h saturation:saturation brightness:brightness alpha:1.0];
 }
 
-static BOOL MiOSIsLightColor(UIColor *color) {
-    CGFloat r, g, b, a;
-    [color getRed:&r green:&g blue:&b alpha:&a];
-    return (0.299 * r + 0.587 * g + 0.114 * b) > 0.68;
+// A contrasting partner for the accent, like the reference's orange/blue pairing:
+// warm accents get a cool indigo tile, cool accents get a warm orange one.
+static UIColor *MiOSPartnerHue(UIColor *accent) {
+    CGFloat h, s, b, a;
+    if (![accent getHue:&h saturation:&s brightness:&b alpha:&a]) return accent;
+    BOOL warm = (h < 0.2 || h > 0.85);
+    return [UIColor colorWithHue:(warm ? 0.64 : 0.06) saturation:0.60 brightness:0.80 alpha:1.0];
 }
 
 @interface MiOSHomeViewController ()
@@ -30,6 +34,7 @@ static BOOL MiOSIsLightColor(UIColor *color) {
 @property (nonatomic, strong) NSArray<MiOSContainerConfig *> *containers;
 @property (nonatomic, copy) NSString *activeContainerID;
 @property (nonatomic, strong) CAGradientLayer *bgGradientLayer;
+@property (nonatomic, strong) MiOSContainerGridView *grid;
 @end
 
 @implementation MiOSHomeViewController
@@ -74,7 +79,14 @@ static BOOL MiOSIsLightColor(UIColor *color) {
 - (void)reloadContainers {
     _containers = [MiOSContainerConfig loadAll];
     _activeContainerID = [MiOSContainerConfig activeContainerID];
+    [MiOSAppIconProvider applyThemeForActiveContainer];
     [self rebuildContent];
+}
+
+- (void)reloadContainersAnimated {
+    [UIView transitionWithView:_scrollView duration:0.35 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
+        [self reloadContainers];
+    } completion:nil];
 }
 
 - (MiOSContainerConfig *)activeContainer {
@@ -128,7 +140,8 @@ static BOOL MiOSIsLightColor(UIColor *color) {
     }
 
     MiOSContainerConfig *active = [self activeContainer];
-    UIColor *accent = active ? [MiOSAppIconProvider accentForBundleIDs:active.apps] : [MiOSTheme accentColor];
+    UIColor *accent = [MiOSTheme accentColor];
+    _grid = nil;
 
     [_mainStack addArrangedSubview:[self buildHeaderWithAccent:accent]];
 
@@ -150,13 +163,13 @@ static BOOL MiOSIsLightColor(UIColor *color) {
         [_mainStack setCustomSpacing:12 afterView:header];
 
         __weak typeof(self) weakSelf = self;
-        MiOSContainerGridView *grid = [[MiOSContainerGridView alloc]
+        _grid = [[MiOSContainerGridView alloc]
             initWithContainers:_containers
                       activeID:active.identifier
-                         onTap:^(MiOSContainerConfig *container) {
-            [weakSelf presentEditorForContainer:container];
+                         onTap:^(MiOSContainerConfig *container, UIView *tile) {
+            [weakSelf showActionsForContainer:container from:tile];
         }];
-        [_mainStack addArrangedSubview:grid];
+        [_mainStack addArrangedSubview:_grid];
     }
 }
 
@@ -294,7 +307,7 @@ static BOOL MiOSIsLightColor(UIColor *color) {
     NSString *deviceName = (c.deviceSpoofEnabled && c.deviceName.length > 0) ? c.deviceName : @"iPhone 15 Pro";
     UIImageView *device = [[UIImageView alloc] init];
     device.contentMode = UIViewContentModeScaleAspectFit;
-    device.image = [MiOSDeviceImageRenderer renderDeviceForName:deviceName size:CGSizeMake(92, 120) accentColor:accent];
+    device.image = [MiOSDeviceImageRenderer renderDeviceForName:deviceName size:CGSizeMake(140, 132) accentColor:accent];
     UIView *halo = [self haloWithContent:device accent:accent inHero:hero];
 
     UILabel *name = [[UILabel alloc] init];
@@ -435,6 +448,19 @@ static BOOL MiOSIsLightColor(UIColor *color) {
 
 #pragma mark - Tiles
 
+// Large faint symbol set into a tile's corner; it gives each card a texture that says what it's about.
+- (UIImageView *)addWatermark:(NSString *)symbol toTile:(UIView *)tile pointSize:(CGFloat)size
+                        color:(UIColor *)color rotation:(CGFloat)rotation {
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:size weight:UIImageSymbolWeightBold];
+    UIImageView *mark = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbol withConfiguration:cfg]];
+    mark.translatesAutoresizingMaskIntoConstraints = NO;
+    mark.userInteractionEnabled = NO;
+    mark.tintColor = color;
+    mark.transform = CGAffineTransformMakeRotation(rotation);
+    [tile insertSubview:mark atIndex:0];
+    return mark;
+}
+
 - (UIView *)buildTilesForContainer:(MiOSContainerConfig *)c accent:(UIColor *)accent {
     UIView *row = [[UIView alloc] init];
     row.translatesAutoresizingMaskIntoConstraints = NO;
@@ -464,9 +490,9 @@ static BOOL MiOSIsLightColor(UIColor *color) {
         [privacy.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
     ]];
 
-    for (UIView *tile in @[location, apps, privacy]) {
-        [tile addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(activeContainerTapped)]];
-    }
+    [location addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(locationTileTapped:)]];
+    [apps addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(appsTileTapped:)]];
+    [privacy addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(spoofingTileTapped:)]];
     return row;
 }
 
@@ -483,30 +509,19 @@ static BOOL MiOSIsLightColor(UIColor *color) {
 }
 
 - (UIView *)locationTileForContainer:(MiOSContainerConfig *)c accent:(UIColor *)accent {
-    UIColor *top = MiOSShiftedHue(accent, 0.5, 0.55, 0.78);
-    UIColor *bottom = MiOSShiftedHue(accent, 0.55, 0.65, 0.48);
-    MiOSGradientView *tile = [self gradientTileWithColors:@[top, bottom] radius:26];
+    UIColor *partner = MiOSPartnerHue(accent);
+    MiOSGradientView *tile = [self gradientTileWithColors:@[MiOSShiftedHue(partner, 0.0, 0.50, 0.82),
+                                                           MiOSShiftedHue(partner, 0.04, 0.70, 0.46)] radius:26];
 
-    // Three small "moons" in the corner, a nod to the reference tile.
-    UIStackView *moons = [[UIStackView alloc] init];
-    moons.translatesAutoresizingMaskIntoConstraints = NO;
-    moons.spacing = 5;
-    for (NSInteger i = 0; i < 3; i++) {
-        UIView *moon = [[UIView alloc] init];
-        moon.translatesAutoresizingMaskIntoConstraints = NO;
-        moon.layer.cornerRadius = 5;
-        moon.layer.borderWidth = 1.0;
-        moon.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.5].CGColor;
-        moon.backgroundColor = [UIColor colorWithWhite:1.0 alpha:(i == 1 ? 0.5 : 0.0)];
-        [moon.widthAnchor constraintEqualToConstant:10].active = YES;
-        [moon.heightAnchor constraintEqualToConstant:10].active = YES;
-        [moons addArrangedSubview:moon];
-    }
-    [tile addSubview:moons];
+    // City skyline with a pin above it.
+    UIImageView *skyline = [self addWatermark:@"building.2.fill" toTile:tile pointSize:96
+                                        color:[UIColor colorWithWhite:1 alpha:0.14] rotation:0];
+    UIImageView *pinMark = [self addWatermark:@"mappin.and.ellipse" toTile:tile pointSize:34
+                                        color:[UIColor colorWithWhite:1 alpha:0.22] rotation:0];
 
     UIView *iconCircle = [[UIView alloc] init];
     iconCircle.translatesAutoresizingMaskIntoConstraints = NO;
-    iconCircle.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.18];
+    iconCircle.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.20];
     iconCircle.layer.cornerRadius = 20;
     [tile addSubview:iconCircle];
 
@@ -534,18 +549,20 @@ static BOOL MiOSIsLightColor(UIColor *color) {
         sub.text = [NSString stringWithFormat:@"%.4f, %.4f", c.latitude, c.longitude];
     } else {
         title.text = @"Real location";
-        sub.text = @"GPS spoof off";
+        sub.text = @"Tap to spoof GPS";
     }
 
     [NSLayoutConstraint activateConstraints:@[
+        [skyline.trailingAnchor constraintEqualToAnchor:tile.trailingAnchor constant:14],
+        [skyline.bottomAnchor constraintEqualToAnchor:tile.bottomAnchor constant:12],
+        [pinMark.centerXAnchor constraintEqualToAnchor:skyline.centerXAnchor constant:-10],
+        [pinMark.bottomAnchor constraintEqualToAnchor:skyline.topAnchor constant:4],
         [iconCircle.topAnchor constraintEqualToAnchor:tile.topAnchor constant:16],
         [iconCircle.leadingAnchor constraintEqualToAnchor:tile.leadingAnchor constant:16],
         [iconCircle.widthAnchor constraintEqualToConstant:40],
         [iconCircle.heightAnchor constraintEqualToConstant:40],
         [icon.centerXAnchor constraintEqualToAnchor:iconCircle.centerXAnchor],
         [icon.centerYAnchor constraintEqualToAnchor:iconCircle.centerYAnchor],
-        [moons.centerYAnchor constraintEqualToAnchor:iconCircle.centerYAnchor],
-        [moons.trailingAnchor constraintEqualToAnchor:tile.trailingAnchor constant:-16],
         [title.leadingAnchor constraintEqualToAnchor:tile.leadingAnchor constant:16],
         [title.trailingAnchor constraintEqualToAnchor:tile.trailingAnchor constant:-16],
         [sub.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:4],
@@ -557,9 +574,11 @@ static BOOL MiOSIsLightColor(UIColor *color) {
 }
 
 - (UIView *)appsTileForContainer:(MiOSContainerConfig *)c accent:(UIColor *)accent {
-    UIColor *end = [MiOSColorExtractor accentGradientEndFromColor:accent] ?: accent;
-    MiOSGradientView *tile = [self gradientTileWithColors:@[accent, end] radius:22];
-    UIColor *textColor = MiOSIsLightColor(accent) ? [UIColor colorWithRed:0.12 green:0.10 blue:0.06 alpha:1.0] : [UIColor whiteColor];
+    MiOSGradientView *tile = [self gradientTileWithColors:@[accent, [MiOSTheme accentGradientEnd]] radius:22];
+    UIColor *textColor = [MiOSTheme textColorOnAccent];
+
+    UIImageView *grid = [self addWatermark:@"square.grid.2x2.fill" toTile:tile pointSize:62
+                                     color:[textColor colorWithAlphaComponent:0.12] rotation:-0.25];
 
     UILabel *count = [[UILabel alloc] init];
     count.translatesAutoresizingMaskIntoConstraints = NO;
@@ -575,7 +594,6 @@ static BOOL MiOSIsLightColor(UIColor *color) {
     caption.textColor = [textColor colorWithAlphaComponent:0.75];
     [tile addSubview:caption];
 
-    // Overlapping icon stack of the container's apps.
     UIView *icons = [[UIView alloc] init];
     icons.translatesAutoresizingMaskIntoConstraints = NO;
     [tile addSubview:icons];
@@ -601,6 +619,8 @@ static BOOL MiOSIsLightColor(UIColor *color) {
     }
 
     [NSLayoutConstraint activateConstraints:@[
+        [grid.centerXAnchor constraintEqualToAnchor:tile.centerXAnchor constant:6],
+        [grid.centerYAnchor constraintEqualToAnchor:tile.bottomAnchor constant:-6],
         [count.leadingAnchor constraintEqualToAnchor:tile.leadingAnchor constant:16],
         [count.centerYAnchor constraintEqualToAnchor:tile.centerYAnchor],
         [caption.leadingAnchor constraintEqualToAnchor:count.trailingAnchor constant:5],
@@ -616,11 +636,16 @@ static BOOL MiOSIsLightColor(UIColor *color) {
 - (UIView *)privacyTileForContainer:(MiOSContainerConfig *)c accent:(UIColor *)accent {
     UIView *tile = [[UIView alloc] init];
     tile.translatesAutoresizingMaskIntoConstraints = NO;
-    tile.backgroundColor = [UIColor colorWithRed:0.14 green:0.15 blue:0.21 alpha:0.92];
+    tile.backgroundColor = [MiOSTheme tileBackground];
     tile.layer.cornerRadius = 22;
     tile.layer.cornerCurve = kCACornerCurveContinuous;
     tile.layer.borderWidth = 1.0;
-    tile.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
+    tile.layer.borderColor = [MiOSTheme hairline].CGColor;
+    tile.clipsToBounds = YES;
+
+    // Chipset watermark: this is the "under the hood" tile.
+    UIImageView *chip = [self addWatermark:@"cpu" toTile:tile pointSize:78
+                                     color:[accent colorWithAlphaComponent:0.10] rotation:0.2];
 
     NSArray<NSNumber *> *flags = @[@(c.spoofDeviceCheck), @(c.spoofVendorID), @(c.spoofAdvertisingID),
                                    @(c.spoofCloudToken), @(c.deviceSpoofEnabled), @(c.gpsEnabled)];
@@ -647,19 +672,20 @@ static BOOL MiOSIsLightColor(UIColor *color) {
     bars.distribution = UIStackViewDistributionFillEqually;
     bars.alignment = UIStackViewAlignmentBottom;
     bars.spacing = 5;
-    for (NSInteger i = 0; i < (NSInteger)flags.count; i++) {
-        BOOL on = flags[i].boolValue;
+    for (NSNumber *flag in flags) {
+        BOOL on = flag.boolValue;
         UIView *bar = [[UIView alloc] init];
         bar.translatesAutoresizingMaskIntoConstraints = NO;
         bar.backgroundColor = on ? accent : [UIColor colorWithWhite:1.0 alpha:0.10];
         bar.layer.cornerRadius = 4;
-        // Enabled bars stand taller, like the reference's equalizer tile.
         [bar.heightAnchor constraintEqualToConstant:on ? 30 : 18].active = YES;
         [bars addArrangedSubview:bar];
     }
     [tile addSubview:bars];
 
     [NSLayoutConstraint activateConstraints:@[
+        [chip.centerXAnchor constraintEqualToAnchor:tile.trailingAnchor constant:-18],
+        [chip.centerYAnchor constraintEqualToAnchor:tile.topAnchor constant:14],
         [title.topAnchor constraintEqualToAnchor:tile.topAnchor constant:14],
         [title.leadingAnchor constraintEqualToAnchor:tile.leadingAnchor constant:14],
         [score.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
@@ -682,12 +708,10 @@ static BOOL MiOSIsLightColor(UIColor *color) {
     host.layer.shadowRadius = 18;
     host.layer.shadowOpacity = 0.35;
 
-    UIColor *end = [MiOSColorExtractor accentGradientEndFromColor:accent] ?: accent;
-    MiOSGradientView *card = [self gradientTileWithColors:@[accent, end] radius:28];
+    MiOSGradientView *card = [self gradientTileWithColors:@[accent, [MiOSTheme accentGradientEnd]] radius:28];
     card.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.28].CGColor;
     [host addSubview:card];
 
-    // Top sheen for a glossy, textured surface.
     MiOSGradientView *sheen = [[MiOSGradientView alloc] init];
     sheen.translatesAutoresizingMaskIntoConstraints = NO;
     sheen.userInteractionEnabled = NO;
@@ -695,38 +719,13 @@ static BOOL MiOSIsLightColor(UIColor *color) {
                start:CGPointMake(0.5, 0.0) end:CGPointMake(0.5, 0.7)];
     [card addSubview:sheen];
 
-    // Half-moon ornaments on both edges.
-    NSMutableArray *moonConstraints = [NSMutableArray array];
-    for (NSInteger side = 0; side < 2; side++) {
-        UIView *outer = [[UIView alloc] init];
-        outer.translatesAutoresizingMaskIntoConstraints = NO;
-        outer.userInteractionEnabled = NO;
-        outer.layer.cornerRadius = 45;
-        outer.layer.borderWidth = 1.5;
-        outer.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.30].CGColor;
-        [card addSubview:outer];
+    UIColor *textColor = [MiOSTheme textColorOnAccent];
 
-        UIView *inner = [[UIView alloc] init];
-        inner.translatesAutoresizingMaskIntoConstraints = NO;
-        inner.userInteractionEnabled = NO;
-        inner.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.14];
-        inner.layer.cornerRadius = 28;
-        [card addSubview:inner];
-
-        NSLayoutXAxisAnchor *edge = side == 0 ? card.leadingAnchor : card.trailingAnchor;
-        [moonConstraints addObjectsFromArray:@[
-            [outer.centerXAnchor constraintEqualToAnchor:edge],
-            [outer.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
-            [outer.widthAnchor constraintEqualToConstant:90],
-            [outer.heightAnchor constraintEqualToConstant:90],
-            [inner.centerXAnchor constraintEqualToAnchor:edge],
-            [inner.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
-            [inner.widthAnchor constraintEqualToConstant:56],
-            [inner.heightAnchor constraintEqualToConstant:56],
-        ]];
-    }
-
-    UIColor *textColor = MiOSIsLightColor(accent) ? [UIColor colorWithRed:0.12 green:0.10 blue:0.06 alpha:1.0] : [UIColor whiteColor];
+    // Folders tucked into both edges.
+    UIImageView *leftFolder = [self addWatermark:@"folder.fill" toTile:card pointSize:64
+                                           color:[textColor colorWithAlphaComponent:0.20] rotation:-0.28];
+    UIImageView *rightFolder = [self addWatermark:@"folder.fill.badge.plus" toTile:card pointSize:64
+                                            color:[textColor colorWithAlphaComponent:0.20] rotation:0.24];
 
     UILabel *title = [[UILabel alloc] init];
     title.translatesAutoresizingMaskIntoConstraints = NO;
@@ -746,7 +745,6 @@ static BOOL MiOSIsLightColor(UIColor *color) {
     sub.minimumScaleFactor = 0.8;
     [card addSubview:sub];
 
-    [NSLayoutConstraint activateConstraints:moonConstraints];
     [NSLayoutConstraint activateConstraints:@[
         [host.heightAnchor constraintEqualToConstant:100],
         [card.topAnchor constraintEqualToAnchor:host.topAnchor],
@@ -757,6 +755,10 @@ static BOOL MiOSIsLightColor(UIColor *color) {
         [sheen.leadingAnchor constraintEqualToAnchor:card.leadingAnchor],
         [sheen.trailingAnchor constraintEqualToAnchor:card.trailingAnchor],
         [sheen.bottomAnchor constraintEqualToAnchor:card.bottomAnchor],
+        [leftFolder.centerXAnchor constraintEqualToAnchor:card.leadingAnchor constant:14],
+        [leftFolder.centerYAnchor constraintEqualToAnchor:card.centerYAnchor constant:10],
+        [rightFolder.centerXAnchor constraintEqualToAnchor:card.trailingAnchor constant:-12],
+        [rightFolder.centerYAnchor constraintEqualToAnchor:card.centerYAnchor constant:-8],
         [title.centerXAnchor constraintEqualToAnchor:card.centerXAnchor],
         [title.bottomAnchor constraintEqualToAnchor:card.centerYAnchor constant:2],
         [sub.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:4],
@@ -770,6 +772,16 @@ static BOOL MiOSIsLightColor(UIColor *color) {
 
 #pragma mark - Actions
 
+- (void)bounce:(UIView *)view {
+    [UIView animateWithDuration:0.08 animations:^{
+        view.transform = CGAffineTransformMakeScale(0.97, 0.97);
+    } completion:^(BOOL finished) {
+        [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:0 animations:^{
+            view.transform = CGAffineTransformIdentity;
+        } completion:nil];
+    }];
+}
+
 - (void)statusPillTapped {
     BOOL enabled = ![_corePrefs[@"enabled"] boolValue];
     _corePrefs[@"enabled"] = @(enabled);
@@ -780,28 +792,64 @@ static BOOL MiOSIsLightColor(UIColor *color) {
 
 - (void)activeContainerTapped {
     MiOSContainerConfig *active = [self activeContainer];
-    if (active) [self presentEditorForContainer:active];
+    if (active) [self presentEditorForContainer:active entry:MiOSEditorEntryFull];
+}
+
+- (void)appsTileTapped:(UITapGestureRecognizer *)sender {
+    [self bounce:sender.view];
+    MiOSContainerConfig *active = [self activeContainer];
+    if (active) [self presentEditorForContainer:active entry:MiOSEditorEntryApps];
+}
+
+- (void)spoofingTileTapped:(UITapGestureRecognizer *)sender {
+    [self bounce:sender.view];
+    MiOSContainerConfig *active = [self activeContainer];
+    if (active) [self presentEditorForContainer:active entry:MiOSEditorEntrySpoofing];
+}
+
+- (void)locationTileTapped:(UITapGestureRecognizer *)sender {
+    [self bounce:sender.view];
+    MiOSContainerConfig *active = [self activeContainer];
+    if (!active) return;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    MiOSLocationPickerViewController *picker = [[MiOSLocationPickerViewController alloc] init];
+    picker.container = active;
+    __weak typeof(self) weakSelf = self;
+    picker.onSave = ^{
+        [weakSelf reloadContainersAnimated];
+    };
+    picker.modalPresentationStyle = UIModalPresentationFullScreen;
+    [self presentViewController:picker animated:YES completion:nil];
 }
 
 - (void)newContainerTapped:(UITapGestureRecognizer *)sender {
-    UIView *card = sender.view;
-    [UIView animateWithDuration:0.08 animations:^{
-        card.transform = CGAffineTransformMakeScale(0.97, 0.97);
-    } completion:^(BOOL finished) {
-        [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:0 animations:^{
-            card.transform = CGAffineTransformIdentity;
-        } completion:nil];
-    }];
-    [self presentEditorForContainer:nil];
+    [self bounce:sender.view];
+    [self presentEditorForContainer:nil entry:MiOSEditorEntryFull];
 }
 
-- (void)presentEditorForContainer:(MiOSContainerConfig *)container {
+- (void)showActionsForContainer:(MiOSContainerConfig *)container from:(UIView *)tile {
+    __weak typeof(self) weakSelf = self;
+    [MiOSContainerActions presentForContainer:container from:self sourceView:tile completion:^(MiOSContainerActionResult result) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (result == MiOSContainerActionRemoved && strongSelf.grid) {
+            [strongSelf.grid removeContainerWithID:container.identifier completion:^{
+                [weakSelf reloadContainersAnimated];
+            }];
+        } else {
+            [strongSelf reloadContainersAnimated];
+        }
+    }];
+}
+
+- (void)presentEditorForContainer:(MiOSContainerConfig *)container entry:(MiOSEditorEntry)entry {
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     MiOSContainerCreateViewController *vc = [[MiOSContainerCreateViewController alloc] init];
     vc.editingContainer = container;
+    vc.entry = entry;
     __weak typeof(self) weakSelf = self;
     vc.onSave = ^{
-        [weakSelf reloadContainers];
+        [weakSelf reloadContainersAnimated];
     };
     vc.modalPresentationStyle = UIModalPresentationPageSheet;
     [self presentViewController:vc animated:YES completion:nil];

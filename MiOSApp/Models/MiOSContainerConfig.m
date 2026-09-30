@@ -67,6 +67,62 @@ static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/
     [self _writePlist:plist];
 }
 
++ (MiOSContainerConfig *)activeContainer {
+    NSArray<MiOSContainerConfig *> *all = [self loadAll];
+    NSString *activeID = [self activeContainerID];
+    for (MiOSContainerConfig *c in all) {
+        if ([c.identifier isEqualToString:activeID]) return c;
+    }
+    return all.firstObject;
+}
+
++ (void)removeContainerWithID:(NSString *)containerID {
+    if (containerID.length == 0) return;
+    NSMutableArray<MiOSContainerConfig *> *all = [[self loadAll] mutableCopy];
+    MiOSContainerConfig *removed = nil;
+    for (MiOSContainerConfig *c in all) {
+        if ([c.identifier isEqualToString:containerID]) {
+            removed = c;
+            break;
+        }
+    }
+    if (!removed) return;
+
+    [removed removeFromSystem];
+    [all removeObject:removed];
+    [self saveAll:all];
+
+    if ([[self activeContainerID] isEqualToString:containerID]) {
+        MiOSContainerConfig *next = all.firstObject;
+        [self setActiveContainerID:next.identifier];
+        [next applyToSystem];
+    }
+}
+
+- (void)removeFromSystem {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *containerPrefsPath = @"/var/mobile/Library/Preferences/MiOS/com.mios.containerprefs.plist";
+    NSMutableDictionary *containerPrefs = [NSMutableDictionary dictionaryWithContentsOfFile:containerPrefsPath];
+    NSMutableDictionary *activeContainers = [NSMutableDictionary dictionaryWithDictionary:containerPrefs[@"activeContainers"] ?: @{}];
+
+    for (NSString *bundleID in self.apps) {
+        if ([activeContainers[bundleID] isEqualToString:self.identifier]) {
+            [activeContainers removeObjectForKey:bundleID];
+        }
+        NSString *appDataPath = [self _findDataPathForBundleID:bundleID];
+        if (appDataPath && self.identifier.length > 0) {
+            NSString *containerDir = [[appDataPath stringByAppendingPathComponent:@"___MiOS_Containers"]
+                                      stringByAppendingPathComponent:self.identifier];
+            [fm removeItemAtPath:containerDir error:nil];
+        }
+    }
+
+    if (containerPrefs) {
+        containerPrefs[@"activeContainers"] = activeContainers;
+        [containerPrefs writeToFile:containerPrefsPath atomically:YES];
+    }
+}
+
 #pragma mark - Serialization
 
 - (instancetype)initWithDictionary:(NSDictionary *)dict {

@@ -1,4 +1,5 @@
 #import "MiOSFloatingTabBar.h"
+#import "../UI/MiOSTheme.h"
 
 static const CGFloat kItemSize = 50;
 static const CGFloat kCenterItemSize = 60;
@@ -73,6 +74,12 @@ static const CGFloat kTopPadding = 8;
         [_labels addObject:label];
     }
     [self applySelectionStyle];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(applySelectionStyle)
+                                                 name:MiOSThemeDidChangeNotification object:nil];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (BOOL)isCenterIndex:(NSInteger)index {
@@ -138,15 +145,16 @@ static const CGFloat kTopPadding = 8;
             _labels[i].font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
         } else {
             BOOL isCenter = [self isCenterIndex:i];
+            UIColor *accent = [MiOSTheme accentColor];
             circle.backgroundColor = isCenter
-                ? [UIColor colorWithRed:0.33 green:0.35 blue:0.82 alpha:0.95]
+                ? [accent colorWithAlphaComponent:0.95]
                 : [UIColor colorWithRed:0.16 green:0.17 blue:0.24 alpha:0.92];
-            circle.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:isCenter ? 0.25 : 0.10].CGColor;
-            circle.layer.shadowOpacity = isCenter ? 0.35 : 0.0;
-            circle.layer.shadowColor = [UIColor colorWithRed:0.33 green:0.35 blue:0.82 alpha:1.0].CGColor;
+            circle.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:isCenter ? 0.30 : 0.10].CGColor;
+            circle.layer.shadowOpacity = isCenter ? 0.45 : 0.0;
+            circle.layer.shadowColor = accent.CGColor;
             circle.layer.shadowRadius = 14;
             circle.layer.shadowOffset = CGSizeZero;
-            _iconViews[i].tintColor = [UIColor colorWithWhite:1.0 alpha:0.85];
+            _iconViews[i].tintColor = isCenter ? [MiOSTheme textColorOnAccent] : [UIColor colorWithWhite:1.0 alpha:0.85];
             _labels[i].textColor = [UIColor colorWithWhite:1.0 alpha:0.55];
             _labels[i].font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium];
         }

@@ -70,8 +70,86 @@
     return [UIColor colorWithRed:avgR green:avgG blue:avgB alpha:1.0];
 }
 
++ (UIColor *)normalizedColorWithRed:(CGFloat)r green:(CGFloat)g blue:(CGFloat)b {
+    CGFloat h, s, v, a;
+    UIColor *c = [UIColor colorWithRed:r green:g blue:b alpha:1.0];
+    [c getHue:&h saturation:&s brightness:&v alpha:&a];
+    // Keep accents vivid enough to read on the dark UI without going neon.
+    s = fmin(fmax(s, 0.55), 0.95);
+    v = fmin(fmax(v, 0.80), 1.0);
+    return [UIColor colorWithHue:h saturation:s brightness:v alpha:1.0];
+}
+
++ (NSArray<UIColor *> *)paletteFromImage:(UIImage *)image {
+    CGImageRef cgImage = image.CGImage;
+    if (!cgImage) return @[];
+
+    enum { sampleSize = 24, binCount = 12 };
+    unsigned char *raw = calloc(sampleSize * sampleSize * 4, 1);
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(raw, sampleSize, sampleSize, 8, sampleSize * 4, space,
+                                             kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(space);
+    if (!ctx) {
+        free(raw);
+        return @[];
+    }
+    CGContextDrawImage(ctx, CGRectMake(0, 0, sampleSize, sampleSize), cgImage);
+    CGContextRelease(ctx);
+
+    CGFloat weight[binCount] = {0};
+    CGFloat sumR[binCount] = {0}, sumG[binCount] = {0}, sumB[binCount] = {0};
+
+    for (NSInteger i = 0; i < sampleSize * sampleSize; i++) {
+        CGFloat a = raw[i * 4 + 3] / 255.0;
+        if (a < 0.5) continue;
+        CGFloat r = raw[i * 4] / 255.0 / a;
+        CGFloat g = raw[i * 4 + 1] / 255.0 / a;
+        CGFloat b = raw[i * 4 + 2] / 255.0 / a;
+        CGFloat h, s, v, alpha;
+        [[UIColor colorWithRed:fmin(r, 1) green:fmin(g, 1) blue:fmin(b, 1) alpha:1] getHue:&h saturation:&s brightness:&v alpha:&alpha];
+        if (s < 0.25 || v < 0.2) continue;
+
+        NSInteger bin = (NSInteger)floor(h * binCount) % binCount;
+        CGFloat w = s * v;
+        weight[bin] += w;
+        sumR[bin] += r * w;
+        sumG[bin] += g * w;
+        sumB[bin] += b * w;
+    }
+    free(raw);
+
+    NSInteger top = -1;
+    for (NSInteger i = 0; i < binCount; i++) {
+        if (weight[i] > 0 && (top < 0 || weight[i] > weight[top])) top = i;
+    }
+    if (top < 0) return @[];
+
+    NSMutableArray<UIColor *> *palette = [NSMutableArray array];
+    [palette addObject:[self normalizedColorWithRed:sumR[top] / weight[top]
+                                              green:sumG[top] / weight[top]
+                                               blue:sumB[top] / weight[top]]];
+
+    // Secondary: strongest bin at least 60° of hue away and carrying a real share of the icon.
+    NSInteger second = -1;
+    for (NSInteger i = 0; i < binCount; i++) {
+        NSInteger distance = labs(i - top);
+        distance = MIN(distance, binCount - distance);
+        if (distance < 2 || weight[i] < weight[top] * 0.15) continue;
+        if (second < 0 || weight[i] > weight[second]) second = i;
+    }
+    if (second >= 0) {
+        [palette addObject:[self normalizedColorWithRed:sumR[second] / weight[second]
+                                                  green:sumG[second] / weight[second]
+                                                   blue:sumB[second] / weight[second]]];
+    }
+    return palette;
+}
+
 + (UIColor *)vibrantColorFromImage:(UIImage *)image {
     if (!image) return nil;
+    UIColor *dominant = [self paletteFromImage:image].firstObject;
+    if (dominant) return dominant;
 
     CGImageRef cgImage = image.CGImage;
     if (!cgImage) return nil;
