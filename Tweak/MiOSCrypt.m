@@ -28,7 +28,11 @@ static const NSUInteger kHeaderLen      = 1 + kSaltLen + kSaltLen + kIVLen;
         // Fresh material: 48 bytes of random mixed with the bundle id so a stolen file
         // alone is not enough — but no user interaction is required.
         NSMutableData *fresh = [NSMutableData dataWithLength:48];
-        SecRandomCopyBytes(kSecRandomDefault, 48, fresh.mutableBytes);
+        if (SecRandomCopyBytes(kSecRandomDefault, 48, fresh.mutableBytes) != errSecSuccess) {
+            // Fallback: fill from arc4random. Still device-local, still unpredictable.
+            uint8_t *b = fresh.mutableBytes;
+            for (NSUInteger i = 0; i < fresh.length; i++) b[i] = (uint8_t)arc4random();
+        }
         NSString *bid = [[NSBundle mainBundle] bundleIdentifier] ?: @"com.burbn.instagram";
         NSData *bidData = [bid dataUsingEncoding:NSUTF8StringEncoding];
         uint8_t *b = fresh.mutableBytes;
@@ -88,9 +92,11 @@ static NSData *aes256cbc(NSData *key, NSData *iv, NSData *input, CCOperation op)
     NSMutableData *encSalt  = [NSMutableData dataWithLength:kSaltLen];
     NSMutableData *hmacSalt = [NSMutableData dataWithLength:kSaltLen];
     NSMutableData *iv       = [NSMutableData dataWithLength:kIVLen];
-    SecRandomCopyBytes(kSecRandomDefault, kSaltLen, encSalt.mutableBytes);
-    SecRandomCopyBytes(kSecRandomDefault, kSaltLen, hmacSalt.mutableBytes);
-    SecRandomCopyBytes(kSecRandomDefault, kIVLen,   iv.mutableBytes);
+    if (SecRandomCopyBytes(kSecRandomDefault, kSaltLen, encSalt.mutableBytes)  != errSecSuccess ||
+        SecRandomCopyBytes(kSecRandomDefault, kSaltLen, hmacSalt.mutableBytes) != errSecSuccess ||
+        SecRandomCopyBytes(kSecRandomDefault, kIVLen,   iv.mutableBytes)       != errSecSuccess) {
+        return nil;
+    }
 
     NSData *password = [self devicePassword];
     NSData *encKey   = pbkdf2(password, encSalt, kKeyLen);
