@@ -27,6 +27,7 @@ typedef CFTypeRef (*MGCopyAnswer_t)(CFStringRef key);
 
 static NSString *gBundleID = nil;
 static NSString *gContainerHome = nil;         // redirected HOME, or nil for the default container
+static NSString *gContainerTmp = nil;
 static NSDictionary *gSpoof = nil;             // per-container spoof prefs
 static NSString *gSpoofSerial = nil;           // derived, stable per container
 static NSString *gSpoofUDID = nil;
@@ -53,6 +54,21 @@ static BOOL deviceSpoofEnabled(void) {
 static NSString *spoofStr(NSString *key) {
     id v = gSpoof[key];
     return [v isKindOfClass:[NSString class]] ? v : @"";
+}
+
+// MARK: - Home-directory redirect hooks
+//
+// setenv(HOME/CFFIXED_USER_HOME) alone is not enough from an injected tweak: by the time our
+// constructor runs the home path may already be cached, so we also force NSHomeDirectory/
+// NSTemporaryDirectory to the container. (These hooks are safe at launch; the earlier splash
+// hang came from the device-spoof hooks, not these.)
+static NSString *(*orig_NSHomeDirectory)(void);
+static NSString *hook_NSHomeDirectory(void) {
+    return gContainerHome ?: orig_NSHomeDirectory();
+}
+static NSString *(*orig_NSTemporaryDirectory)(void);
+static NSString *hook_NSTemporaryDirectory(void) {
+    return gContainerTmp ?: orig_NSTemporaryDirectory();
 }
 
 // MARK: - GPS Location Hooks (per container)
@@ -472,10 +488,12 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
             }
             if (writable) {
                 gContainerHome = home;
-                // Exactly like LiveContainer: only the two env vars, and do NOT touch TMPDIR or
-                // inline-hook NSHomeDirectory (that can deadlock CoreFoundation during launch).
+                gContainerTmp = [home stringByAppendingPathComponent:@"tmp"];
                 setenv("CFFIXED_USER_HOME", home.UTF8String, 1);
                 setenv("HOME", home.UTF8String, 1);
+                // Force the cached home/tmp too — setenv alone is too late in an injected tweak.
+                MSHookFunction((void *)NSHomeDirectory, (void *)hook_NSHomeDirectory, (void **)&orig_NSHomeDirectory);
+                MSHookFunction((void *)NSTemporaryDirectory, (void *)hook_NSTemporaryDirectory, (void **)&orig_NSTemporaryDirectory);
 
                 // Per-container preferences and keychain (opt-in; so each container is its own account).
                 if (gPrefsIsolation) miosInitPrefsRedirect();
