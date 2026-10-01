@@ -1,67 +1,124 @@
-# Injecting miOS into Instagram
+# Инжект miOS в Instagram IPA
 
-miOS is a single Mach-O dylib (`miOS.dylib`) that targets **only
-`com.burbn.instagram`**. There is no daemon, no companion app, no central
-preference file — the full container state (encrypted) lives inside Instagram's
-own sandbox at `…/Documents/miOS/`.
+miOS — это один Mach-O dylib (`miOS.dylib`, fat arm64+arm64e), целящий **только
+`com.burbn.instagram`**. Чтобы устройство загрузило его при каждом запуске
+Instagram, нужно:
 
-## What miOS gives Instagram
+1. добавить в главный бинарь Instagram команду загрузки
+   `LC_LOAD_DYLIB → @executable_path/Frameworks/miOS.dylib`;
+2. положить сам `miOS.dylib` в `Payload/Instagram.app/Frameworks/`;
+3. снять старую подпись (`_CodeSignature/`, `embedded.mobileprovision`);
+4. переподписать (ldid для TrollStore / jailbreak, твой Apple-сертификат для
+   AltStore / Sideloadly, или они подпишут сами при установке).
 
-A draggable **miOS** button appears in Instagram. Tapping it opens a modal
-sheet with 5 tabs:
+Три способа это сделать: нажатие в CI, локально, или на устройстве.
 
-| Tab          | What it does                                                                 |
-|--------------|------------------------------------------------------------------------------|
-| Containers   | List / create / rename / delete / switch containers.                         |
-| **Spoof**    | The full device fingerprint for the active container — model, iOS, kernel, memory, CPU, carrier, cellular IP + type, Wi-Fi SSID / BSSID / IP, battery, brightness, Low Power Mode, gyroscope, screenshot detection, mail/message availability, anti-anti-jailbreak, identifiers (IDFV / IDFA / DeviceCheck / iCloud). |
-| **Location** | MKMapView picker (long-press to drop a pin), map style segment (Standard / Satellite / Hybrid) with 3 cached snapshots per container, manual coordinate entry + reverse-geocoded place name. |
-| Proxy (BETA) | Per-container HTTPS proxy injected into `NSURLSessionConfiguration`.         |
-| Settings     | About and "Reset miOS" (erase everything).                                   |
+## Способ 1 — одна кнопка в GitHub Actions
 
-Each container has:
+Самый простой — всё делает CI, тебе достаточно прямой ссылки на IPA.
 
-- An isolated data subtree (Documents / Library / tmp inside Instagram's sandbox).
-- Its own keychain namespace (keeps each container's IG session separate).
-- Its own cached App-Group state — wiped on first launch so IG re-registers.
-- Its own encrypted plist of fingerprint settings
-  (`miOS.container-list.plist`, `miOS.container-config.plist`,
-  AES-256-CBC + HMAC-SHA256 + PBKDF2-SHA256 × 10k).
-- Its own location + 3 saved map snapshots.
+1. Открой **Actions** → **Patch Instagram IPA** → **Run workflow**.
+2. В поле `ipa_url` вставь прямую ссылку на твой Instagram IPA (dropbox,
+   mega, файл с любого хостинга который отдаёт его напрямую, собственный
+   S3-URL и т.д.).
+3. Нажми **Run**. Через ~1 минуту внизу run-страницы появится артефакт
+   **`Instagram-IPA-miOS`** — скачай и ставь (см. ниже).
 
-Switching an active container prompts a restart (Instagram must relaunch so
-hooks are installed from byte 0).
+Workflow сам:
+- берёт последний зелёный `miOS.dylib` с ветки,
+- качает твой IPA,
+- вызывает `scripts/patch-ipa.sh`,
+- подписывает dylib + бинарь через `ldid -S` (self-sign),
+- отдаёт готовый `Instagram-miOS.ipa` как артефакт.
 
-## Install path 1 — Sideloaded IPA (no jailbreak)
-
-1. Build the dylib:
-   ```bash
-   make FINALPACKAGE=1
-   # output: .theos/obj/miOS.dylib
-   ```
-   Or grab the `miOS-dylib` artifact from the GitHub Actions build.
-
-2. Patch an Instagram IPA with any signer that supports dylib injection:
-   - **Sideloadly / AltStore / TrollStore** — use the *Inject .dylib* field.
-   - **ldid + insert_dylib** manually:
-     ```bash
-     unzip Instagram.ipa -d ig/
-     EXE="ig/Payload/Instagram.app/Instagram"
-     insert_dylib --inplace --all-yes --weak @executable_path/Frameworks/miOS.dylib "$EXE"
-     mkdir -p "ig/Payload/Instagram.app/Frameworks"
-     cp miOS.dylib "ig/Payload/Instagram.app/Frameworks/"
-     ldid -S "$EXE"
-     ldid -S "ig/Payload/Instagram.app/Frameworks/miOS.dylib"
-     cd ig && zip -r ../Instagram-miOS.ipa Payload && cd ..
-     ```
-
-3. Resign and install the IPA with your usual signer.
-
-> No extra entitlements are required.
-
-## Install path 2 — Jailbreak (rootless)
+## Способ 2 — локально одной командой
 
 ```bash
-make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
-# /var/jb/Library/MobileSubstrate/DynamicLibraries/miOS.dylib
-# /var/jb/Library/MobileSubstrate/DynamicLibraries/miOS.plist   # filter -> com.burbn.instagram
+scripts/patch-ipa.sh Instagram.ipa miOS.dylib Instagram-miOS.ipa
 ```
+
+Что нужно на машине:
+- `unzip`, `zip` (стандартно),
+- [`insert_dylib`](https://github.com/tyilo/insert_dylib) или
+  [Linux-порт](https://github.com/Jhonsonlaid/insert_dylib),
+- [`ldid`](https://github.com/ProcursusTeam/ldid) (нужен только для self-sign;
+  если ставишь через AltStore/Sideloadly — можно без него).
+
+На macOS `insert_dylib` ставится из Homebrew (`brew install insert_dylib`) или
+собирается из указанного репо. `ldid` на macOS тоже есть в Homebrew.
+
+Что делает скрипт:
+1. распаковывает IPA во временный каталог;
+2. находит `Payload/*.app` и его главный бинарь (по `CFBundleExecutable` из
+   `Info.plist`);
+3. копирует `miOS.dylib` в `.app/Frameworks/`;
+4. добавляет weak-load `@executable_path/Frameworks/miOS.dylib` через
+   `insert_dylib --inplace --all-yes --weak`;
+5. удаляет `_CodeSignature/` и `embedded.mobileprovision`;
+6. (опционально) `ldid -S` на dylib и бинарь, с сохранением original
+   entitlements главного бинаря;
+7. упаковывает обратно в `.ipa`.
+
+## Способ 3 — ручной рецепт (чтобы понимать что происходит)
+
+```bash
+# 1. Распаковать.
+unzip Instagram.ipa -d ig/
+EXE="ig/Payload/Instagram.app/Instagram"
+
+# 2. Положить dylib.
+mkdir -p ig/Payload/Instagram.app/Frameworks
+cp miOS.dylib ig/Payload/Instagram.app/Frameworks/
+
+# 3. Добавить LC_LOAD_DYLIB.
+insert_dylib --inplace --all-yes --weak \
+    @executable_path/Frameworks/miOS.dylib \
+    "$EXE"
+
+# 4. Снять старую подпись.
+rm -rf ig/Payload/Instagram.app/_CodeSignature
+rm -f  ig/Payload/Instagram.app/embedded.mobileprovision
+
+# 5. Self-sign (пропусти если AltStore/Sideloadly сам подпишет).
+ldid -S ig/Payload/Instagram.app/Frameworks/miOS.dylib
+ldid -e "$EXE" >ent.plist 2>/dev/null && ldid -Sent.plist "$EXE" || ldid -S "$EXE"
+
+# 6. Собрать обратно.
+cd ig && zip -r ../Instagram-miOS.ipa Payload && cd ..
+```
+
+## Как установить пропатченный IPA на устройство
+
+| Способ          | Нужен Apple-сертификат? | Нужен джейл? | Срок жизни |
+|-----------------|-------------------------|--------------|------------|
+| **TrollStore**  | нет                     | нет¹         | навсегда   |
+| **AltStore**    | бесплатный Apple ID     | нет          | 7 дней²    |
+| **Sideloadly**  | бесплатный Apple ID     | нет          | 7 дней²    |
+| **Xcode + dev** | платный ($99/год)       | нет          | 1 год      |
+| **Jailbreak**   | нет                     | да           | навсегда   |
+
+¹ TrollStore работает на iOS 14.0–16.6.1 через `CoreTrust`-уязвимость; это не
+джейлбрейк, но и не каждая прошивка.
+² AltStore / Sideloadly с бесплатным Apple ID даёт провижн на 7 дней — потом
+нужно пересобирать и пере-ставить (AltServer делает это автоматически в
+локальной сети).
+
+На устройстве:
+- **TrollStore**: AirDrop IPA → "Open with TrollStore" → Install.
+- **AltStore**: открой `.ipa` в AltStore на устройстве (или с Mac/PC через
+  AltServer). AltStore сам подпишет и установит.
+- **Sideloadly**: подключи iPhone к компьютеру, запусти Sideloadly, выбери IPA,
+  введи Apple ID.
+
+## Проверка что всё работает
+
+После установки запусти Instagram. В правой части экрана должна появиться
+круглая градиентная кнопка **miOS**. Тап → откроется шторка с 5 вкладками
+(Containers / Spoof / Location / Proxy / ⚙︎). Если кнопки нет:
+
+- проверь, что `miOS.dylib` реально лежит в `Payload/Instagram.app/Frameworks/`
+  в установленной `.app` (TrollStore показывает содержимое пакета);
+- проверь что в бинаре есть команда `LC_LOAD_DYLIB` на наш путь:
+  `otool -L Payload/Instagram.app/Instagram | grep miOS`;
+- если ставил через AltStore/Sideloadly — убедись что они не выкинули
+  `Frameworks/miOS.dylib` при переподписи (иногда они аггрессивно чистят).

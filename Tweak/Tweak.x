@@ -132,7 +132,10 @@ static CLLocation *spoofedLocationObject(void) {
 }
 %end
 %hook CLLocation
-- (CLLocationCoordinate2D)coordinate { return locationSpoofEnabled() ? spoofedCoordinate() : %orig; }
+- (CLLocationCoordinate2D)coordinate {
+    if (locationSpoofEnabled()) return spoofedCoordinate();
+    return %orig;
+}
 %end
 // end LocationHooks
 
@@ -186,9 +189,15 @@ static CLLocation *spoofedLocationObject(void) {
     }
     return %orig;
 }
-- (unsigned long long)physicalMemory { return gcMemsize ? gcMemsize : %orig; }
-- (NSUInteger)processorCount { return gcCPU ? (NSUInteger)gcCPU : %orig; }
-- (NSUInteger)activeProcessorCount { return gcCPU ? (NSUInteger)gcCPU : %orig; }
+- (unsigned long long)physicalMemory {
+    return gcMemsize ? gcMemsize : %orig;
+}
+- (NSUInteger)processorCount {
+    return gcCPU ? (NSUInteger)gcCPU : %orig;
+}
+- (NSUInteger)activeProcessorCount {
+    return gcCPU ? (NSUInteger)gcCPU : %orig;
+}
 - (BOOL)isLowPowerModeEnabled {
     if (spoofBool(@"enableSpoofLowPowerMode")) return spoofBool(@"lowPowerModeEnabled");
     return %orig;
@@ -281,10 +290,22 @@ static CLLocation *spoofedLocationObject(void) {
 
 // group CarrierHooks
 %hook CTCarrier
-- (NSString *)carrierName       { return spoofBool(@"enableSpoofCarrier") ? spoofStr(@"carrierName")        : %orig; }
-- (NSString *)mobileCountryCode { return spoofBool(@"enableSpoofCarrier") ? spoofStr(@"carrierMCC")         : %orig; }
-- (NSString *)mobileNetworkCode { return spoofBool(@"enableSpoofCarrier") ? spoofStr(@"carrierMNC")         : %orig; }
-- (NSString *)isoCountryCode    { return spoofBool(@"enableSpoofCarrier") ? spoofStr(@"carrierCountryCode") : %orig; }
+- (NSString *)carrierName {
+    if (spoofBool(@"enableSpoofCarrier")) return spoofStr(@"carrierName");
+    return %orig;
+}
+- (NSString *)mobileCountryCode {
+    if (spoofBool(@"enableSpoofCarrier")) return spoofStr(@"carrierMCC");
+    return %orig;
+}
+- (NSString *)mobileNetworkCode {
+    if (spoofBool(@"enableSpoofCarrier")) return spoofStr(@"carrierMNC");
+    return %orig;
+}
+- (NSString *)isoCountryCode {
+    if (spoofBool(@"enableSpoofCarrier")) return spoofStr(@"carrierCountryCode");
+    return %orig;
+}
 %end
 %hook CTTelephonyNetworkInfo
 - (NSString *)currentRadioAccessTechnology {
@@ -329,7 +350,10 @@ static CLLocation *spoofedLocationObject(void) {
     }
     return %orig;
 }
-- (BOOL)isAdvertisingTrackingEnabled { return spoofBool(@"enableSpoofAdvertisingID") ? NO : %orig; }
+- (BOOL)isAdvertisingTrackingEnabled {
+    if (spoofBool(@"enableSpoofAdvertisingID")) return NO;
+    return %orig;
+}
 %end
 %hook DCDevice
 - (void)generateTokenWithCompletionHandler:(void (^)(NSData *, NSError *))completion {
@@ -342,7 +366,10 @@ static CLLocation *spoofedLocationObject(void) {
 }
 %end
 %hook NSFileManager
-- (id)ubiquityIdentityToken { return spoofBool(@"enableSpoofCloudToken") ? nil : %orig; }
+- (id)ubiquityIdentityToken {
+    if (spoofBool(@"enableSpoofCloudToken")) return nil;
+    return %orig;
+}
 %end
 // end IdentifierSpoofHooks
 
