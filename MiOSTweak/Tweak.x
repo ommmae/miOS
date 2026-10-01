@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <CoreLocation/CoreLocation.h>
 #import <UIKit/UIKit.h>
+#import <Security/Security.h>
 #import <objc/runtime.h>
 #import <dlfcn.h>
 #import <sys/sysctl.h>
@@ -30,6 +31,9 @@ static NSString *gContainerTmp = nil;
 static NSDictionary *gSpoof = nil;             // per-container spoof prefs
 static NSString *gSpoofSerial = nil;           // derived, stable per container
 static NSString *gSpoofUDID = nil;
+static NSString *gKcPrefix = nil;              // per-container keychain namespace prefix
+static BOOL gKeychainIsolation = YES;          // kill-switches (core plist), default on
+static BOOL gPrefsIsolation = YES;
 
 static BOOL isMiOSEnabled(void) {
     NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:
@@ -230,6 +234,150 @@ static CLLocation *spoofedLocationObject(void) {
 
 %end // IdentifierSpoofHooks
 
+// MARK: - Keychain namespacing (per container, Crane-style)
+//
+// We inject into the real app, so we cannot switch to a private access group the way
+// LiveContainer does. Instead we namespace items inside the app's own access group by
+// prefixing the service-like key fields with a per-container tag, and strip the prefix
+// back out of returned attributes so the app never sees it.
+
+static OSStatus (*orig_SecItemAdd)(CFDictionaryRef, CFTypeRef *);
+static OSStatus (*orig_SecItemCopyMatching)(CFDictionaryRef, CFTypeRef *);
+static OSStatus (*orig_SecItemUpdate)(CFDictionaryRef, CFDictionaryRef);
+static OSStatus (*orig_SecItemDelete)(CFDictionaryRef);
+
+static NSArray *kcPrefixedKeys(void) {
+    return @[(__bridge id)kSecAttrService, (__bridge id)kSecAttrServer];
+}
+
+// Returns a copy of dict with service-like fields prefixed; sets *modified if anything changed.
+static NSDictionary *kcApplyPrefix(CFDictionaryRef dict, BOOL *modified) {
+    if (!dict) return nil;
+    NSMutableDictionary *copy = [(__bridge NSDictionary *)dict mutableCopy];
+    BOOL changed = NO;
+    for (id key in kcPrefixedKeys()) {
+        id value = copy[key];
+        if ([value isKindOfClass:[NSString class]] && ![value hasPrefix:gKcPrefix]) {
+            copy[key] = [gKcPrefix stringByAppendingString:value];
+            changed = YES;
+        }
+    }
+    if (modified) *modified = changed;
+    return copy;
+}
+
+static id kcStripObject(id obj) {
+    if ([obj isKindOfClass:[NSArray class]]) {
+        NSMutableArray *out = [NSMutableArray arrayWithCapacity:[obj count]];
+        for (id item in obj) [out addObject:kcStripObject(item)];
+        return out;
+    }
+    if ([obj isKindOfClass:[NSDictionary class]]) {
+        NSMutableDictionary *out = [obj mutableCopy];
+        for (id key in kcPrefixedKeys()) {
+            id value = out[key];
+            if ([value isKindOfClass:[NSString class]] && [value hasPrefix:gKcPrefix]) {
+                out[key] = [value substringFromIndex:gKcPrefix.length];
+            }
+        }
+        return out;
+    }
+    return obj;
+}
+
+static void kcStripResult(CFTypeRef *result) {
+    if (!result || !*result) return;
+    id obj = (__bridge id)*result;
+    if (![obj isKindOfClass:[NSArray class]] && ![obj isKindOfClass:[NSDictionary class]]) return;
+    id stripped = kcStripObject(obj);
+    CFRelease(*result);
+    *result = (__bridge_retained CFTypeRef)stripped;
+}
+
+static OSStatus new_SecItemAdd(CFDictionaryRef attributes, CFTypeRef *result) {
+    BOOL modified = NO;
+    NSDictionary *copy = kcApplyPrefix(attributes, &modified);
+    if (!modified) return orig_SecItemAdd(attributes, result);
+    OSStatus status = orig_SecItemAdd((__bridge CFDictionaryRef)copy, result);
+    if (status == errSecParam) return orig_SecItemAdd(attributes, result);
+    return status;
+}
+
+static OSStatus new_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result) {
+    BOOL modified = NO;
+    NSDictionary *copy = kcApplyPrefix(query, &modified);
+    if (!modified) return orig_SecItemCopyMatching(query, result);
+    OSStatus status = orig_SecItemCopyMatching((__bridge CFDictionaryRef)copy, result);
+    if (status == errSecParam) return orig_SecItemCopyMatching(query, result);
+    if (status == errSecSuccess) kcStripResult(result);
+    return status;
+}
+
+static OSStatus new_SecItemUpdate(CFDictionaryRef query, CFDictionaryRef attributesToUpdate) {
+    BOOL modified = NO;
+    NSDictionary *copy = kcApplyPrefix(query, &modified);
+    // Prefix the update payload too, so a changed service stays namespaced.
+    NSDictionary *attrCopy = kcApplyPrefix(attributesToUpdate, NULL);
+    if (!modified) return orig_SecItemUpdate(query, attributesToUpdate);
+    OSStatus status = orig_SecItemUpdate((__bridge CFDictionaryRef)copy, (__bridge CFDictionaryRef)attrCopy);
+    if (status == errSecParam) return orig_SecItemUpdate(query, attributesToUpdate);
+    return status;
+}
+
+static OSStatus new_SecItemDelete(CFDictionaryRef query) {
+    BOOL modified = NO;
+    NSDictionary *copy = kcApplyPrefix(query, &modified);
+    if (!modified) return orig_SecItemDelete(query);
+    OSStatus status = orig_SecItemDelete((__bridge CFDictionaryRef)copy);
+    if (status == errSecParam) return orig_SecItemDelete(query);
+    return status;
+}
+
+static void miosInitKeychainNamespace(void) {
+    MSHookFunction((void *)SecItemAdd, (void *)new_SecItemAdd, (void **)&orig_SecItemAdd);
+    MSHookFunction((void *)SecItemCopyMatching, (void *)new_SecItemCopyMatching, (void **)&orig_SecItemCopyMatching);
+    MSHookFunction((void *)SecItemUpdate, (void *)new_SecItemUpdate, (void **)&orig_SecItemUpdate);
+    MSHookFunction((void *)SecItemDelete, (void *)new_SecItemDelete, (void **)&orig_SecItemDelete);
+}
+
+// MARK: - Preferences redirect (per container, like LiveContainer)
+//
+// Swizzle the private CFPrefsPlistSource initializer and force its container path to the
+// redirected HOME for non-Apple domains, so NSUserDefaults/CFPreferences read and write
+// <container>/Library/Preferences/<domain>.plist instead of the real container's.
+
+static BOOL miosIsAppleDomain(NSString *domain) {
+    return [domain hasPrefix:@"com.apple."] || [domain hasPrefix:@"group.com.apple."]
+        || [domain hasPrefix:@"systemgroup.com.apple."];
+}
+
+@interface MiOSPrefsSourceShim : NSObject
+@end
+@implementation MiOSPrefsSourceShim
+- (id)mios_initWithDomain:(CFStringRef)domain user:(CFStringRef)user byHost:(bool)host
+            containerPath:(CFStringRef)containerPath containingPreferences:(id)prefs {
+    if (gContainerHome.length == 0 || miosIsAppleDomain((__bridge NSString *)domain)) {
+        return [self mios_initWithDomain:domain user:user byHost:host containerPath:containerPath containingPreferences:prefs];
+    }
+    if (user == kCFPreferencesAnyUser) user = kCFPreferencesCurrentUser;
+    return [self mios_initWithDomain:domain user:user byHost:host
+                       containerPath:(__bridge CFStringRef)gContainerHome containingPreferences:prefs];
+}
+@end
+
+static void miosInitPrefsRedirect(void) {
+    Class src = NSClassFromString(@"CFPrefsPlistSource");
+    SEL orig = NSSelectorFromString(@"initWithDomain:user:byHost:containerPath:containingPreferences:");
+    SEL repl = @selector(mios_initWithDomain:user:byHost:containerPath:containingPreferences:);
+    Method origM = src ? class_getInstanceMethod(src, orig) : NULL;
+    Method replM = class_getInstanceMethod([MiOSPrefsSourceShim class], repl);
+    if (!origM || !replM) return; // private API moved; skip rather than crash
+
+    class_addMethod(src, repl, method_getImplementation(replM), method_getTypeEncoding(replM));
+    Method added = class_getInstanceMethod(src, repl);
+    if (added) method_exchangeImplementations(origM, added);
+}
+
 // MARK: - sysctlbyname (hw.machine / hw.model)
 
 static int (*orig_sysctlbyname)(const char *, void *, size_t *, void *, size_t);
@@ -317,6 +465,12 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
         BOOL containerEnabled = [appPrefs(gBundleID)[@"containerEnabled"] boolValue];
         NSString *uuid = [mgr activeContainerUUIDForBundleID:gBundleID];
 
+        NSDictionary *corePrefs = [NSDictionary dictionaryWithContentsOfFile:
+            @"/var/mobile/Library/Preferences/MiOS/com.mios.core.plist"];
+        // Kill-switches so a problematic app can be recovered without rebuilding (default on).
+        gKeychainIsolation = corePrefs[@"keychainIsolation"] ? [corePrefs[@"keychainIsolation"] boolValue] : YES;
+        gPrefsIsolation = corePrefs[@"prefsIsolation"] ? [corePrefs[@"prefsIsolation"] boolValue] : YES;
+
         // 1. Redirect the whole home directory into the container (the Crane/LiveContainer core).
         if (containerEnabled && uuid) {
             NSString *home = [mgr homePathForBundleID:gBundleID ensureCreated:YES];
@@ -328,6 +482,13 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
                 setenv("TMPDIR", gContainerTmp.UTF8String, 1);
                 MSHookFunction((void *)NSHomeDirectory, (void *)hook_NSHomeDirectory, (void **)&orig_NSHomeDirectory);
                 MSHookFunction((void *)NSTemporaryDirectory, (void *)hook_NSTemporaryDirectory, (void **)&orig_NSTemporaryDirectory);
+
+                // Per-container preferences and keychain (so each container is its own account).
+                if (gPrefsIsolation) miosInitPrefsRedirect();
+                if (gKeychainIsolation) {
+                    gKcPrefix = [NSString stringWithFormat:@"__mios_%@_", uuid];
+                    miosInitKeychainNamespace();
+                }
             }
         }
 
