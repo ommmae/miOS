@@ -419,9 +419,10 @@ static CFTypeRef hook_MGCopyAnswer(CFStringRef key) {
             if (spoofStr(@"hwModel").length > 0) return (__bridge_retained CFTypeRef)[spoofStr(@"hwModel") copy];
         } else if ([k isEqualToString:@"ProductVersion"]) {
             if (spoofStr(@"iosVersion").length > 0) return (__bridge_retained CFTypeRef)[spoofStr(@"iosVersion") copy];
-        } else if (gSpoofSerial && ([k isEqualToString:@"SerialNumber"])) {
+        } else if (gSpoofSerial && [k isEqualToString:@"SerialNumber"]) {
             return (__bridge_retained CFTypeRef)[gSpoofSerial copy];
-        } else if (gSpoofUDID && ([k isEqualToString:@"UniqueDeviceID"] || [k isEqualToString:@"UniqueDeviceIDData"])) {
+        } else if (gSpoofUDID && [k isEqualToString:@"UniqueDeviceID"]) {
+            // Only the string form; UniqueDeviceIDData expects CFData, so leave it untouched.
             return (__bridge_retained CFTypeRef)[gSpoofUDID copy];
         }
     }
