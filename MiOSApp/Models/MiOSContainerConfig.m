@@ -153,6 +153,33 @@ static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/
         _customDeviceName = dict[@"customDeviceName"] ?: @"";
         _spoofDeviceName = [dict[@"spoofDeviceName"] boolValue];
 
+        // Hardware
+        _ramGB = [dict[@"ramGB"] integerValue];
+        _cpuCores = [dict[@"cpuCores"] integerValue];
+        _chipName = dict[@"chipName"] ?: @"";
+
+        // Carrier
+        _spoofCarrier = [dict[@"spoofCarrier"] boolValue];
+        _carrierName = dict[@"carrierName"] ?: @"";
+        _carrierMCC = dict[@"carrierMCC"] ?: @"";
+        _carrierMNC = dict[@"carrierMNC"] ?: @"";
+        _carrierISO = dict[@"carrierISO"] ?: @"";
+
+        // Wi-Fi
+        _spoofWiFi = [dict[@"spoofWiFi"] boolValue];
+        _wifiSSID = dict[@"wifiSSID"] ?: @"";
+        _wifiBSSID = dict[@"wifiBSSID"] ?: @"";
+
+        // Battery
+        _spoofBattery = [dict[@"spoofBattery"] boolValue];
+        _batteryLevel = dict[@"batteryLevel"] ? [dict[@"batteryLevel"] integerValue] : 100;
+        _batteryCharging = [dict[@"batteryCharging"] boolValue];
+
+        // Locale / time zone
+        _spoofLocale = [dict[@"spoofLocale"] boolValue];
+        _localeID = dict[@"localeID"] ?: @"";
+        _timeZoneID = dict[@"timeZoneID"] ?: @"";
+
         // Identifiers
         _spoofDeviceCheck = [dict[@"spoofDeviceCheck"] boolValue];
         _spoofVendorID = [dict[@"spoofVendorID"] boolValue];
@@ -181,6 +208,23 @@ static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/
         @"storageSizeGB": @(self.storageSizeGB),
         @"customDeviceName": self.customDeviceName ?: @"",
         @"spoofDeviceName": @(self.spoofDeviceName),
+        @"ramGB": @(self.ramGB),
+        @"cpuCores": @(self.cpuCores),
+        @"chipName": self.chipName ?: @"",
+        @"spoofCarrier": @(self.spoofCarrier),
+        @"carrierName": self.carrierName ?: @"",
+        @"carrierMCC": self.carrierMCC ?: @"",
+        @"carrierMNC": self.carrierMNC ?: @"",
+        @"carrierISO": self.carrierISO ?: @"",
+        @"spoofWiFi": @(self.spoofWiFi),
+        @"wifiSSID": self.wifiSSID ?: @"",
+        @"wifiBSSID": self.wifiBSSID ?: @"",
+        @"spoofBattery": @(self.spoofBattery),
+        @"batteryLevel": @(self.batteryLevel),
+        @"batteryCharging": @(self.batteryCharging),
+        @"spoofLocale": @(self.spoofLocale),
+        @"localeID": self.localeID ?: @"",
+        @"timeZoneID": self.timeZoneID ?: @"",
         @"spoofDeviceCheck": @(self.spoofDeviceCheck),
         @"spoofVendorID": @(self.spoofVendorID),
         @"vendorID": self.vendorID ?: @"",
@@ -222,6 +266,23 @@ static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/
         @"storageSizeGB": @(self.storageSizeGB),
         @"customDeviceName": self.customDeviceName ?: @"",
         @"spoofDeviceName": @(self.spoofDeviceName),
+        @"ramGB": @(self.ramGB),
+        @"cpuCores": @(self.cpuCores),
+        @"chipName": self.chipName ?: @"",
+        @"spoofCarrier": @(self.spoofCarrier),
+        @"carrierName": self.carrierName ?: @"",
+        @"carrierMCC": self.carrierMCC ?: @"",
+        @"carrierMNC": self.carrierMNC ?: @"",
+        @"carrierISO": self.carrierISO ?: @"",
+        @"spoofWiFi": @(self.spoofWiFi),
+        @"wifiSSID": self.wifiSSID ?: @"",
+        @"wifiBSSID": self.wifiBSSID ?: @"",
+        @"spoofBattery": @(self.spoofBattery),
+        @"batteryLevel": @(self.batteryLevel),
+        @"batteryCharging": @(self.batteryCharging),
+        @"spoofLocale": @(self.spoofLocale),
+        @"localeID": self.localeID ?: @"",
+        @"timeZoneID": self.timeZoneID ?: @"",
     };
 }
 

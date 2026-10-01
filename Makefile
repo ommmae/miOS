@@ -9,7 +9,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = MiOSTweak
 MiOSTweak_FILES = $(wildcard MiOSTweak/*.x) $(wildcard MiOSTweak/*.m)
 MiOSTweak_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
-MiOSTweak_FRAMEWORKS = Foundation CoreFoundation UIKit CoreLocation Security
+MiOSTweak_FRAMEWORKS = Foundation CoreFoundation UIKit CoreLocation Security CoreTelephony SystemConfiguration
 
 APPLICATION_NAME = MiOS
 MiOS_FILES = $(wildcard MiOSApp/*.m) $(wildcard MiOSApp/Controllers/*.m) $(wildcard MiOSApp/Views/*.m) $(wildcard MiOSApp/Models/*.m) $(wildcard MiOSApp/Utils/*.m) $(wildcard MiOSApp/UI/*.m)

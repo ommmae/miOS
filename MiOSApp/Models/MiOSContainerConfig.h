@@ -18,6 +18,28 @@
 @property (nonatomic, assign) NSInteger storageSizeGB;
 @property (nonatomic, copy) NSString *customDeviceName;
 @property (nonatomic, assign) BOOL spoofDeviceName;
+// Hardware (RAM/CPU/chip). 0/empty = derive automatically from the chosen model.
+@property (nonatomic, assign) NSInteger ramGB;
+@property (nonatomic, assign) NSInteger cpuCores;
+@property (nonatomic, copy) NSString *chipName;
+// Carrier. Empty values are derived automatically when spoofCarrier is on.
+@property (nonatomic, assign) BOOL spoofCarrier;
+@property (nonatomic, copy) NSString *carrierName;
+@property (nonatomic, copy) NSString *carrierMCC;
+@property (nonatomic, copy) NSString *carrierMNC;
+@property (nonatomic, copy) NSString *carrierISO;
+// Wi-Fi. Empty values are derived automatically when spoofWiFi is on.
+@property (nonatomic, assign) BOOL spoofWiFi;
+@property (nonatomic, copy) NSString *wifiSSID;
+@property (nonatomic, copy) NSString *wifiBSSID;
+// Battery.
+@property (nonatomic, assign) BOOL spoofBattery;
+@property (nonatomic, assign) NSInteger batteryLevel;   // 0-100
+@property (nonatomic, assign) BOOL batteryCharging;
+// Locale / time zone.
+@property (nonatomic, assign) BOOL spoofLocale;
+@property (nonatomic, copy) NSString *localeID;
+@property (nonatomic, copy) NSString *timeZoneID;
 // Identifiers
 @property (nonatomic, assign) BOOL spoofDeviceCheck;
 @property (nonatomic, assign) BOOL spoofVendorID;

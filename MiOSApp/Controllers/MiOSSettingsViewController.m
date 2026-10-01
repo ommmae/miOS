@@ -54,9 +54,9 @@ static NSString *const kMiOSCorePlist = @"/var/mobile/Library/Preferences/MiOS/c
 
 #pragma mark - Experimental isolation toggles
 
-- (BOOL)coreBoolForKey:(NSString *)key {
+- (BOOL)coreBoolForKey:(NSString *)key defaultValue:(BOOL)def {
     NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kMiOSCorePlist];
-    return [prefs[key] boolValue];
+    return prefs[key] ? [prefs[key] boolValue] : def;
 }
 
 - (void)setCoreBool:(BOOL)value forKey:(NSString *)key {
@@ -76,7 +76,7 @@ static NSString *const kMiOSCorePlist = @"/var/mobile/Library/Preferences/MiOS/c
                  icon:@"folder.fill.badge.gearshape"
                 color:[UIColor systemTealColor]
                   key:@"fileIsolation"];
-    fileCell.isOn = [self coreBoolForKey:@"fileIsolation"];
+    fileCell.isOn = [self coreBoolForKey:@"fileIsolation" defaultValue:NO];
     fileCell.delegate = self;
     [section addCellView:fileCell];
     [section addSeparator];
@@ -87,7 +87,7 @@ static NSString *const kMiOSCorePlist = @"/var/mobile/Library/Preferences/MiOS/c
                  icon:@"key.fill"
                 color:[UIColor systemIndigoColor]
                   key:@"keychainIsolation"];
-    kcCell.isOn = [self coreBoolForKey:@"keychainIsolation"];
+    kcCell.isOn = [self coreBoolForKey:@"keychainIsolation" defaultValue:YES];
     kcCell.delegate = self;
     [section addCellView:kcCell];
     [section addSeparator];
@@ -98,7 +98,7 @@ static NSString *const kMiOSCorePlist = @"/var/mobile/Library/Preferences/MiOS/c
                  icon:@"slider.horizontal.3"
                 color:[UIColor systemPurpleColor]
                   key:@"prefsIsolation"];
-    prefCell.isOn = [self coreBoolForKey:@"prefsIsolation"];
+    prefCell.isOn = [self coreBoolForKey:@"prefsIsolation" defaultValue:NO];
     prefCell.delegate = self;
     [section addCellView:prefCell];
 

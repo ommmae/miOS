@@ -5,6 +5,7 @@
 #import <objc/runtime.h>
 #import <dlfcn.h>
 #import <sys/sysctl.h>
+#import <sys/utsname.h>
 #import "MiOSContainerManager.h"
 
 // MARK: - Private declarations
@@ -23,14 +24,37 @@ typedef CFTypeRef (*MGCopyAnswer_t)(CFStringRef key);
 - (BOOL)isAdvertisingTrackingEnabled;
 @end
 
+// CoreTelephony (carrier)
+@interface CTCarrier : NSObject
+- (NSString *)carrierName;
+- (NSString *)mobileCountryCode;
+- (NSString *)mobileNetworkCode;
+- (NSString *)isoCountryCode;
+- (BOOL)allowsVOIP;
+@end
+
+@interface CTTelephonyNetworkInfo : NSObject
+- (CTCarrier *)subscriberCellularProvider;
+- (NSDictionary<NSString *, CTCarrier *> *)serviceSubscriberCellularProviders;
+- (NSString *)currentRadioAccessTechnology;
+- (NSDictionary<NSString *, NSString *> *)serviceCurrentRadioAccessTechnology;
+@end
+
+// CaptiveNetwork (Wi-Fi) — SystemConfiguration
+typedef CFDictionaryRef (*CNCopyCurrentNetworkInfo_t)(CFStringRef interfaceName);
+
 // MARK: - Shared runtime state (resolved once, in the constructor)
 
 static NSString *gBundleID = nil;
 static NSDictionary *gSpoof = nil;             // per-container spoof prefs
+static NSString *gContainerUUID = nil;         // seed for deterministic per-container derivation
 static NSString *gSpoofSerial = nil;           // derived, stable per container
 static NSString *gSpoofUDID = nil;
 static NSString *gKcPrefix = nil;              // per-container keychain namespace prefix
-static BOOL gKeychainIsolation = NO;           // opt-in (core plist): separate keychain per container
+static BOOL gKeychainIsolation = YES;          // default on: separate keychain per container (sessions)
+
+// Defined lower down; used by the derivation helpers below.
+static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length);
 
 static BOOL isMiOSEnabled(void) {
     NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:
@@ -51,6 +75,79 @@ static BOOL deviceSpoofEnabled(void) {
 static NSString *spoofStr(NSString *key) {
     id v = gSpoof[key];
     return [v isKindOfClass:[NSString class]] ? v : @"";
+}
+
+static BOOL spoofBool(NSString *key) {
+    return [gSpoof[key] boolValue];
+}
+
+static NSInteger spoofInt(NSString *key) {
+    return [gSpoof[key] integerValue];
+}
+
+// Carrier/Wi-Fi are part of the "new unique device" fingerprint, so they follow the device-spoof
+// master switch, but can also be enabled on their own.
+static BOOL carrierSpoofActive(void) { return spoofBool(@"spoofCarrier") || deviceSpoofEnabled(); }
+static BOOL wifiSpoofActive(void)    { return spoofBool(@"spoofWiFi")    || deviceSpoofEnabled(); }
+// Battery/locale are cosmetic and can mislead apps, so they stay explicit opt-ins.
+static BOOL batterySpoofActive(void) { return spoofBool(@"spoofBattery"); }
+static BOOL localeSpoofActive(void)  { return spoofBool(@"spoofLocale"); }
+
+// MARK: - Deterministic per-container derivation (so each container looks like a distinct device)
+
+static NSString *derivedPick(NSString *salt, NSArray *options) {
+    if (options.count == 0) return @"";
+    NSString *hex = derivedHex(gContainerUUID, salt, 8);
+    unsigned long v = (unsigned long)strtoull(hex.UTF8String, NULL, 16);
+    return options[v % options.count];
+}
+
+// {name, mcc, mnc, iso}
+static NSArray *derivedCarrierTuple(void) {
+    static NSArray *carriers = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        carriers = @[
+            @[@"Verizon",  @"311", @"480", @"us"],
+            @[@"AT&T",     @"310", @"410", @"us"],
+            @[@"T-Mobile", @"310", @"260", @"us"],
+            @[@"Vodafone", @"234", @"15",  @"gb"],
+            @[@"O2",       @"234", @"10",  @"gb"],
+            @[@"Orange",   @"208", @"01",  @"fr"],
+            @[@"Telekom",  @"262", @"01",  @"de"],
+            @[@"MTS",      @"250", @"01",  @"ru"],
+            @[@"Beeline",  @"250", @"99",  @"ru"],
+        ];
+    });
+    NSString *hex = derivedHex(gContainerUUID, @"carrier", 8);
+    unsigned long v = (unsigned long)strtoull(hex.UTF8String, NULL, 16);
+    return carriers[v % carriers.count];
+}
+
+static NSString *carrierField(NSString *explicitKey, NSUInteger tupleIndex) {
+    NSString *explicit = spoofStr(explicitKey);
+    if (explicit.length > 0) return explicit;
+    return derivedCarrierTuple()[tupleIndex];
+}
+
+static NSString *derivedBSSID(void) {
+    NSString *explicit = spoofStr(@"wifiBSSID");
+    if (explicit.length > 0) return explicit;
+    NSString *hex = derivedHex(gContainerUUID, @"bssid", 12);
+    return [NSString stringWithFormat:@"%c%c:%c%c:%c%c:%c%c:%c%c:%c%c",
+        [hex characterAtIndex:0], [hex characterAtIndex:1],
+        [hex characterAtIndex:2], [hex characterAtIndex:3],
+        [hex characterAtIndex:4], [hex characterAtIndex:5],
+        [hex characterAtIndex:6], [hex characterAtIndex:7],
+        [hex characterAtIndex:8], [hex characterAtIndex:9],
+        [hex characterAtIndex:10], [hex characterAtIndex:11]];
+}
+
+static NSString *derivedSSID(void) {
+    NSString *explicit = spoofStr(@"wifiSSID");
+    if (explicit.length > 0) return explicit;
+    NSString *base = derivedPick(@"ssidbase", @[@"Home", @"WiFi", @"Net", @"Linksys", @"NETGEAR", @"TP-Link", @"iPhone"]);
+    return [NSString stringWithFormat:@"%@-%@", base, derivedHex(gContainerUUID, @"ssidnum", 4)];
 }
 
 // MARK: - GPS Location Hooks (per container)
@@ -121,6 +218,21 @@ static CLLocation *spoofedLocationObject(void) {
 
 // MARK: - Device model spoofing (per container)
 
+// Bytes of RAM to report (explicit ramGB, else derived from the model family).
+static unsigned long long spoofedMemsize(void) {
+    NSInteger gb = spoofInt(@"ramGB");
+    if (gb <= 0) gb = [derivedPick(@"ram", @[@"3", @"4", @"6", @"8"]) integerValue];
+    if (gb <= 0) gb = 4;
+    return (unsigned long long)gb * 1024ULL * 1024ULL * 1024ULL;
+}
+
+static NSInteger spoofedCPUCores(void) {
+    NSInteger n = spoofInt(@"cpuCores");
+    if (n <= 0) n = [derivedPick(@"cpu", @[@"6", @"6", @"8"]) integerValue];
+    if (n <= 0) n = 6;
+    return n;
+}
+
 %group DeviceSpoofHooks
 
 %hook UIDevice
@@ -135,6 +247,15 @@ static CLLocation *spoofedLocationObject(void) {
     if ([gSpoof[@"spoofDeviceName"] boolValue] && custom.length > 0) return custom;
     NSString *name = spoofStr(@"deviceName");
     return name.length > 0 ? name : %orig;
+}
+
+- (NSString *)model {
+    // Keep the generic class ("iPhone"/"iPad") consistent with the spoofed identifier.
+    NSString *ident = spoofStr(@"deviceIdentifier");
+    if ([ident hasPrefix:@"iPad"]) return @"iPad";
+    if ([ident hasPrefix:@"iPod"]) return @"iPod touch";
+    if ([ident hasPrefix:@"iPhone"]) return @"iPhone";
+    return %orig;
 }
 
 %end
@@ -154,9 +275,84 @@ static CLLocation *spoofedLocationObject(void) {
     return %orig;
 }
 
+- (NSString *)operatingSystemVersionString {
+    NSString *ver = spoofStr(@"iosVersion");
+    if (ver.length > 0) return [NSString stringWithFormat:@"Version %@", ver];
+    return %orig;
+}
+
+- (unsigned long long)physicalMemory {
+    return spoofedMemsize();
+}
+
+- (NSUInteger)processorCount {
+    return (NSUInteger)spoofedCPUCores();
+}
+
+- (NSUInteger)activeProcessorCount {
+    return (NSUInteger)spoofedCPUCores();
+}
+
 %end
 
 %end // DeviceSpoofHooks
+
+// MARK: - Battery spoofing (per container)
+
+%group BatteryHooks
+
+%hook UIDevice
+
+- (float)batteryLevel {
+    NSInteger lvl = spoofInt(@"batteryLevel");
+    if (lvl < 0) lvl = 0; if (lvl > 100) lvl = 100;
+    return (float)lvl / 100.0f;
+}
+
+- (UIDeviceBatteryState)batteryState {
+    return spoofBool(@"batteryCharging") ? UIDeviceBatteryStateCharging : UIDeviceBatteryStateUnplugged;
+}
+
+%end
+
+%end // BatteryHooks
+
+// MARK: - Locale / time zone spoofing (per container)
+
+%group LocaleHooks
+
+%hook NSTimeZone
+
++ (NSTimeZone *)localTimeZone {
+    NSString *tz = spoofStr(@"timeZoneID");
+    NSTimeZone *z = tz.length > 0 ? [NSTimeZone timeZoneWithName:tz] : nil;
+    return z ?: %orig;
+}
+
++ (NSTimeZone *)systemTimeZone {
+    NSString *tz = spoofStr(@"timeZoneID");
+    NSTimeZone *z = tz.length > 0 ? [NSTimeZone timeZoneWithName:tz] : nil;
+    return z ?: %orig;
+}
+
+%end
+
+%end // LocaleHooks
+
+// MARK: - Carrier spoofing (per container)
+
+%group CarrierHooks
+
+%hook CTCarrier
+
+- (NSString *)carrierName   { return carrierField(@"carrierName", 0); }
+- (NSString *)mobileCountryCode { return carrierField(@"carrierMCC", 1); }
+- (NSString *)mobileNetworkCode { return carrierField(@"carrierMNC", 2); }
+- (NSString *)isoCountryCode    { return carrierField(@"carrierISO", 3); }
+
+%end
+
+%end // CarrierHooks
 
 // MARK: - Identifier spoofing (per container)
 
@@ -232,7 +428,9 @@ static OSStatus (*orig_SecItemUpdate)(CFDictionaryRef, CFDictionaryRef);
 static OSStatus (*orig_SecItemDelete)(CFDictionaryRef);
 
 static NSArray *kcPrefixedKeys(void) {
-    return @[(__bridge id)kSecAttrService, (__bridge id)kSecAttrServer];
+    // Namespace the primary-key fields so each container sees only its own items. Account is
+    // included so session tokens stored per-account (e.g. Instagram) stay isolated per container.
+    return @[(__bridge id)kSecAttrService, (__bridge id)kSecAttrServer, (__bridge id)kSecAttrAccount];
 }
 
 // Returns a copy of dict with service-like fields prefixed; sets *modified if anything changed.
@@ -326,9 +524,10 @@ static void miosInitKeychainNamespace(void) {
 }
 
 
-// MARK: - sysctlbyname (hw.machine / hw.model)
+// MARK: - sysctlbyname (hw.machine / hw.model / cpu / memory)
 
 static int (*orig_sysctlbyname)(const char *, void *, size_t *, void *, size_t);
+static int (*orig_uname)(struct utsname *);
 
 static int copyStringOut(void *oldp, size_t *oldlenp, NSString *value) {
     const char *cstr = [value UTF8String];
@@ -340,6 +539,13 @@ static int copyStringOut(void *oldp, size_t *oldlenp, NSString *value) {
     return 0;
 }
 
+// Writes an integer back matching the width the real call returned (4 or 8 bytes).
+static int copyIntOut(void *oldp, size_t *oldlenp, unsigned long long value) {
+    if (*oldlenp >= 8) { *(uint64_t *)oldp = (uint64_t)value; *oldlenp = 8; }
+    else if (*oldlenp >= 4) { *(uint32_t *)oldp = (uint32_t)value; *oldlenp = 4; }
+    return 0;
+}
+
 static int hook_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     int ret = orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
     if (ret != 0 || !oldp || !oldlenp || !deviceSpoofEnabled()) return ret;
@@ -348,8 +554,42 @@ static int hook_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void
         return copyStringOut(oldp, oldlenp, spoofStr(@"deviceIdentifier"));
     } else if (strcmp(name, "hw.model") == 0 && spoofStr(@"hwModel").length > 0) {
         return copyStringOut(oldp, oldlenp, spoofStr(@"hwModel"));
+    } else if (strcmp(name, "hw.memsize") == 0) {
+        return copyIntOut(oldp, oldlenp, spoofedMemsize());
+    } else if (strcmp(name, "hw.ncpu") == 0 || strcmp(name, "hw.logicalcpu") == 0 ||
+               strcmp(name, "hw.logicalcpu_max") == 0 || strcmp(name, "hw.activecpu") == 0) {
+        return copyIntOut(oldp, oldlenp, (unsigned long long)spoofedCPUCores());
+    } else if (strcmp(name, "hw.physicalcpu") == 0 || strcmp(name, "hw.physicalcpu_max") == 0) {
+        return copyIntOut(oldp, oldlenp, (unsigned long long)spoofedCPUCores());
     }
     return ret;
+}
+
+static int hook_uname(struct utsname *buf) {
+    int ret = orig_uname(buf);
+    if (ret != 0 || !buf || !deviceSpoofEnabled()) return ret;
+    NSString *ident = spoofStr(@"deviceIdentifier");
+    if (ident.length > 0) {
+        strncpy(buf->machine, ident.UTF8String, sizeof(buf->machine) - 1);
+        buf->machine[sizeof(buf->machine) - 1] = '\0';
+    }
+    return ret;
+}
+
+// MARK: - CaptiveNetwork (Wi-Fi SSID / BSSID)
+
+static CNCopyCurrentNetworkInfo_t orig_CNCopyCurrentNetworkInfo = NULL;
+
+static CFDictionaryRef hook_CNCopyCurrentNetworkInfo(CFStringRef interfaceName) {
+    if (wifiSpoofActive()) {
+        NSDictionary *info = @{
+            @"SSID": derivedSSID(),
+            @"BSSID": derivedBSSID(),
+            @"SSIDDATA": [derivedSSID() dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data],
+        };
+        return (__bridge_retained CFDictionaryRef)info;
+    }
+    return orig_CNCopyCurrentNetworkInfo ? orig_CNCopyCurrentNetworkInfo(interfaceName) : NULL;
 }
 
 // MARK: - MobileGestalt
@@ -416,7 +656,8 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
 
         NSDictionary *corePrefs = [NSDictionary dictionaryWithContentsOfFile:
             @"/var/mobile/Library/Preferences/MiOS/com.mios.core.plist"];
-        gKeychainIsolation = [corePrefs[@"keychainIsolation"] boolValue];
+        // Default ON so container sessions persist; only off if explicitly disabled.
+        gKeychainIsolation = corePrefs[@"keychainIsolation"] ? [corePrefs[@"keychainIsolation"] boolValue] : YES;
 
         // NOTE: file-level containerization is NOT done in-process anymore. The privileged daemon
         // (miosd) reassigns the app's REAL data container before launch, so the app runs natively in
@@ -431,6 +672,7 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
         // 2. Per-container spoof: device model, identifiers, GPS. Only for container apps.
         if (!uuid) return;
         gSpoof = [mgr spoofPrefsForBundleID:gBundleID];
+        gContainerUUID = uuid;
         gSpoofSerial = derivedHex(uuid, @"serial", 11);
         gSpoofUDID = derivedHex(uuid, @"udid", 25);
 
@@ -444,6 +686,7 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
             %init(DeviceSpoofHooks);
 
             MSHookFunction((void *)sysctlbyname, (void *)hook_sysctlbyname, (void **)&orig_sysctlbyname);
+            MSHookFunction((void *)uname, (void *)hook_uname, (void **)&orig_uname);
 
             void *mgHandle = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
             if (!mgHandle) mgHandle = dlopen("/var/jb/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
@@ -451,6 +694,28 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
                 MGCopyAnswer_t mgFn = (MGCopyAnswer_t)dlsym(mgHandle, "MGCopyAnswer");
                 if (mgFn) MSHookFunction((void *)mgFn, (void *)hook_MGCopyAnswer, (void **)&orig_MGCopyAnswer);
             }
+        }
+
+        // 3. Carrier spoofing (part of the device fingerprint, or standalone).
+        if (carrierSpoofActive()) {
+            %init(CarrierHooks);
+        }
+
+        // 4. Wi-Fi (SSID/BSSID) spoofing via CaptiveNetwork.
+        if (wifiSpoofActive()) {
+            void *scHandle = dlopen("/System/Library/Frameworks/SystemConfiguration.framework/SystemConfiguration", RTLD_LAZY);
+            if (scHandle) {
+                CNCopyCurrentNetworkInfo_t cnFn = (CNCopyCurrentNetworkInfo_t)dlsym(scHandle, "CNCopyCurrentNetworkInfo");
+                if (cnFn) MSHookFunction((void *)cnFn, (void *)hook_CNCopyCurrentNetworkInfo, (void **)&orig_CNCopyCurrentNetworkInfo);
+            }
+        }
+
+        // 5. Battery + locale/time-zone (explicit opt-ins).
+        if (batterySpoofActive()) {
+            %init(BatteryHooks);
+        }
+        if (localeSpoofActive()) {
+            %init(LocaleHooks);
         }
     }
 }
