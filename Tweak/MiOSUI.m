@@ -496,30 +496,38 @@ typedef NS_ENUM(NSInteger, MiOSSpoofSec) {
             MiOSContainer *m = self.container;
             MiOSSwitchCell *c = [t dequeueReusableCellWithIdentifier:@"sw" forIndexPath:ip];
             switch (ip.row) {
-                case 0:
+                case 0: {
                     [c setSymbol:@"person.text.rectangle" tint:[MiOSTheme accent]
                            title:@"Vendor ID (IDFV)" subtitle:m.vendorID];
                     c.toggle.on = m.enableSpoofVendorID;
                     c.onToggle = ^(BOOL on){ ws.container.enableSpoofVendorID = on;
                         if (on && ws.container.vendorID.length == 0) ws.container.vendorID = [NSUUID UUID].UUIDString;
-                        [ws save]; [ws.tableView reloadData]; }; break;
-                case 1:
+                        [ws save]; [ws.tableView reloadData]; };
+                    break;
+                }
+                case 1: {
                     [c setSymbol:@"a.square" tint:[MiOSTheme accent]
                            title:@"Advertising ID" subtitle:m.advertisingID];
                     c.toggle.on = m.enableSpoofAdvertisingID;
                     c.onToggle = ^(BOOL on){ ws.container.enableSpoofAdvertisingID = on;
                         if (on && ws.container.advertisingID.length == 0) ws.container.advertisingID = [NSUUID UUID].UUIDString;
-                        [ws save]; [ws.tableView reloadData]; }; break;
-                case 2:
+                        [ws save]; [ws.tableView reloadData]; };
+                    break;
+                }
+                case 2: {
                     [c setSymbol:@"checkmark.shield" tint:[MiOSTheme accent]
                            title:@"Block DeviceCheck" subtitle:@"Return 'unsupported' to DCDevice"];
                     c.toggle.on = m.enableSpoofDeviceCheck;
-                    c.onToggle = ^(BOOL on){ ws.container.enableSpoofDeviceCheck = on; [ws save]; }; break;
-                default:
+                    c.onToggle = ^(BOOL on){ ws.container.enableSpoofDeviceCheck = on; [ws save]; };
+                    break;
+                }
+                default: {
                     [c setSymbol:@"icloud.slash" tint:[MiOSTheme accent]
                            title:@"Hide iCloud token" subtitle:@"ubiquityIdentityToken → nil"];
                     c.toggle.on = m.enableSpoofCloudToken;
-                    c.onToggle = ^(BOOL on){ ws.container.enableSpoofCloudToken = on; [ws save]; }; break;
+                    c.onToggle = ^(BOOL on){ ws.container.enableSpoofCloudToken = on; [ws save]; };
+                    break;
+                }
             }
             return c;
         }
@@ -527,32 +535,40 @@ typedef NS_ENUM(NSInteger, MiOSSpoofSec) {
             MiOSContainer *m = self.container;
             MiOSSwitchCell *c = [t dequeueReusableCellWithIdentifier:@"sw" forIndexPath:ip];
             switch (ip.row) {
-                case 0:
+                case 0: {
                     [c setSymbol:@"antenna.radiowaves.left.and.right" tint:[MiOSTheme accent]
                            title:@"Carrier" subtitle:m.carrierName.length ? [NSString stringWithFormat:@"%@ %@", m.carrierFlag ?: @"", m.carrierName] : @"Random"];
                     c.toggle.on = m.enableSpoofCarrier;
                     c.onToggle = ^(BOOL on){ ws.container.enableSpoofCarrier = on;
                         if (on && ws.container.carrierName.length == 0) [ws.container randomizeCarrier];
-                        [ws save]; [ws.tableView reloadData]; }; break;
-                case 1:
+                        [ws save]; [ws.tableView reloadData]; };
+                    break;
+                }
+                case 1: {
                     [c setSymbol:@"dot.radiowaves.right" tint:[MiOSTheme accent]
                            title:@"Cellular type" subtitle:m.cellularType.length ? m.cellularType : @"Random"];
                     c.toggle.on = m.enableSpoofCellularType;
-                    c.onToggle = ^(BOOL on){ ws.container.enableSpoofCellularType = on; [ws save]; }; break;
-                case 2:
+                    c.onToggle = ^(BOOL on){ ws.container.enableSpoofCellularType = on; [ws save]; };
+                    break;
+                }
+                case 2: {
                     [c setSymbol:@"network" tint:[MiOSTheme accent]
                            title:@"Cellular IP" subtitle:m.cellularAddress.length ? m.cellularAddress : @"Random"];
                     c.toggle.on = m.enableSpoofCellular;
                     c.onToggle = ^(BOOL on){ ws.container.enableSpoofCellular = on;
                         if (on && ws.container.cellularAddress.length == 0) [ws.container randomizeCellular];
-                        [ws save]; [ws.tableView reloadData]; }; break;
-                case 3:
+                        [ws save]; [ws.tableView reloadData]; };
+                    break;
+                }
+                case 3: {
                     [c setSymbol:@"wifi" tint:[MiOSTheme accent]
                            title:@"Wi-Fi" subtitle:m.wifiSSID.length ? [NSString stringWithFormat:@"%@ · %@", m.wifiSSID, m.wifiBSSID] : @"Random"];
                     c.toggle.on = m.enableSpoofWiFi;
                     c.onToggle = ^(BOOL on){ ws.container.enableSpoofWiFi = on;
                         if (on && ws.container.wifiSSID.length == 0) [ws.container randomizeWiFi];
-                        [ws save]; [ws.tableView reloadData]; }; break;
+                        [ws save]; [ws.tableView reloadData]; };
+                    break;
+                }
                 default: {
                     MiOSFieldCell *f = [t dequeueReusableCellWithIdentifier:@"fd" forIndexPath:ip];
                     [f setSymbol:@"globe" title:@"Wi-Fi IP" value:m.wifiAddress placeholder:@"192.168.1.42"];
@@ -566,7 +582,7 @@ typedef NS_ENUM(NSInteger, MiOSSpoofSec) {
             MiOSContainer *m = self.container;
             MiOSSwitchCell *c = [t dequeueReusableCellWithIdentifier:@"sw" forIndexPath:ip];
             switch (ip.row) {
-                case 0:
+                case 0: {
                     [c setSymbol:@"globe" tint:[MiOSTheme accent] title:@"Locale & TimeZone"
                        subtitle:m.localeID.length ? [NSString stringWithFormat:@"%@ · %@", m.localeID, m.timeZoneID] : @"Random"];
                     c.toggle.on = m.enableSpoofLocale;
@@ -574,40 +590,54 @@ typedef NS_ENUM(NSInteger, MiOSSpoofSec) {
                         ws.container.enableSpoofLocale = on; ws.container.enableSpoofTimeZone = on;
                         if (on && ws.container.localeID.length == 0) [ws.container randomizeLocale];
                         [ws save]; [ws.tableView reloadData];
-                    }; break;
-                case 1:
+                    };
+                    break;
+                }
+                case 1: {
                     [c setSymbol:@"sun.max" tint:[MiOSTheme accent] title:@"Brightness"
                        subtitle:[NSString stringWithFormat:@"%.0f%%", m.brightnessLevel * 100]];
                     c.toggle.on = m.enableSpoofBrightness;
-                    c.onToggle = ^(BOOL on){ ws.container.enableSpoofBrightness = on; [ws save]; }; break;
-                case 2:
+                    c.onToggle = ^(BOOL on){ ws.container.enableSpoofBrightness = on; [ws save]; };
+                    break;
+                }
+                case 2: {
                     [c setSymbol:@"bolt.slash" tint:[MiOSTheme accent] title:@"Low Power Mode"
                        subtitle:m.lowPowerModeEnabled ? @"Enabled" : @"Disabled"];
                     c.toggle.on = m.enableSpoofLowPowerMode;
-                    c.onToggle = ^(BOOL on){ ws.container.enableSpoofLowPowerMode = on; [ws save]; }; break;
-                case 3:
+                    c.onToggle = ^(BOOL on){ ws.container.enableSpoofLowPowerMode = on; [ws save]; };
+                    break;
+                }
+                case 3: {
                     [c setSymbol:@"gyroscope" tint:[MiOSTheme accent] title:@"Gyroscope"
                        subtitle:@"Random x / y / z each read"];
                     c.toggle.on = m.enableSpoofGyroscope;
-                    c.onToggle = ^(BOOL on){ ws.container.enableSpoofGyroscope = on; [ws save]; }; break;
-                case 4:
+                    c.onToggle = ^(BOOL on){ ws.container.enableSpoofGyroscope = on; [ws save]; };
+                    break;
+                }
+                case 4: {
                     [c setSymbol:@"camera.metering.unknown" tint:[MiOSTheme accent] title:@"Screenshot detection"
                        subtitle:@"Hide 'screenshot taken' events"];
                     c.toggle.on = m.enableSpoofScreenshot;
-                    c.onToggle = ^(BOOL on){ ws.container.enableSpoofScreenshot = on; [ws save]; }; break;
-                case 5:
+                    c.onToggle = ^(BOOL on){ ws.container.enableSpoofScreenshot = on; [ws save]; };
+                    break;
+                }
+                case 5: {
                     [c setSymbol:@"envelope.badge.shield.half.filled" tint:[MiOSTheme accent] title:@"Mail / Messages availability"
                        subtitle:@"canSendMail / canSendText → false"];
                     c.toggle.on = m.enableSpoofMail && m.enableSpoofMessage;
                     c.onToggle = ^(BOOL on){
                         ws.container.enableSpoofMail = on; ws.container.mailAvailable = NO;
                         ws.container.enableSpoofMessage = on; ws.container.messageAvailable = NO; [ws save];
-                    }; break;
-                default:
+                    };
+                    break;
+                }
+                default: {
                     [c setSymbol:@"eye.slash" tint:[MiOSTheme accent] title:@"Disable detection"
                        subtitle:@"Hide jailbreak probes"];
                     c.toggle.on = m.enableDisableDetection;
-                    c.onToggle = ^(BOOL on){ ws.container.enableDisableDetection = on; [ws save]; }; break;
+                    c.onToggle = ^(BOOL on){ ws.container.enableDisableDetection = on; [ws save]; };
+                    break;
+                }
             }
             return c;
         }
@@ -902,21 +932,29 @@ typedef NS_ENUM(NSInteger, MiOSSpoofSec) {
     MiOSFieldCell *f = [t dequeueReusableCellWithIdentifier:@"fd" forIndexPath:ip];
     MiOSContainer *m = self.container;
     switch (ip.row) {
-        case 0:
+        case 0: {
             [f setSymbol:@"server.rack" title:@"Host" value:m.proxyHost placeholder:@"proxy.example.com"];
-            f.onChange = ^(NSString *v){ ws.container.proxyHost = v; [ws.container save]; }; break;
-        case 1:
+            f.onChange = ^(NSString *v){ ws.container.proxyHost = v; [ws.container save]; };
+            break;
+        }
+        case 1: {
             [f setSymbol:@"number" title:@"Port" value:m.proxyPort > 0 ? [NSString stringWithFormat:@"%ld", (long)m.proxyPort] : @""
              placeholder:@"8080"];
             f.field.keyboardType = UIKeyboardTypeNumberPad;
-            f.onChange = ^(NSString *v){ ws.container.proxyPort = v.integerValue; [ws.container save]; }; break;
-        case 2:
+            f.onChange = ^(NSString *v){ ws.container.proxyPort = v.integerValue; [ws.container save]; };
+            break;
+        }
+        case 2: {
             [f setSymbol:@"person" title:@"Username" value:m.proxyUsername placeholder:@"optional"];
-            f.onChange = ^(NSString *v){ ws.container.proxyUsername = v; [ws.container save]; }; break;
-        default:
+            f.onChange = ^(NSString *v){ ws.container.proxyUsername = v; [ws.container save]; };
+            break;
+        }
+        default: {
             [f setSymbol:@"key" title:@"Password" value:m.proxyPassword placeholder:@"optional"];
             f.field.secureTextEntry = YES;
-            f.onChange = ^(NSString *v){ ws.container.proxyPassword = v; [ws.container save]; }; break;
+            f.onChange = ^(NSString *v){ ws.container.proxyPassword = v; [ws.container save]; };
+            break;
+        }
     }
     return f;
 }
