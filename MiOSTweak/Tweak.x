@@ -5,14 +5,14 @@
 #import <dlfcn.h>
 #import <sys/sysctl.h>
 #import "MiOSContainerManager.h"
-#import "MiOSLocationManager.h"
+
+// MARK: - Private declarations
 
 typedef int (*libSandy_applyProfile_t)(const char *profileName);
 typedef CFTypeRef (*MGCopyAnswer_t)(CFStringRef key);
 
 @interface DCDevice : NSObject
 @property (class, readonly) DCDevice *currentDevice;
-@property (nonatomic, readonly, getter=isSupported) BOOL supported;
 - (void)generateTokenWithCompletionHandler:(void (^)(NSData *, NSError *))completion;
 @end
 
@@ -22,233 +22,98 @@ typedef CFTypeRef (*MGCopyAnswer_t)(CFStringRef key);
 - (BOOL)isAdvertisingTrackingEnabled;
 @end
 
-static void applySandyProfile(const char *profileName) {
-    static libSandy_applyProfile_t fn = NULL;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        void *handle = dlopen("/usr/lib/libsandy.dylib", RTLD_LAZY);
-        if (!handle) handle = dlopen("/var/jb/usr/lib/libsandy.dylib", RTLD_LAZY);
-        if (handle) fn = (libSandy_applyProfile_t)dlsym(handle, "libSandy_applyProfile");
-    });
-    if (fn) fn(profileName);
-}
+// MARK: - Shared runtime state (resolved once, in the constructor)
 
-static NSString *currentBundleID(void) {
-    return [[NSBundle mainBundle] bundleIdentifier];
-}
+static NSString *gBundleID = nil;
+static NSString *gContainerHome = nil;         // redirected HOME, or nil for the default container
+static NSString *gContainerTmp = nil;
+static NSDictionary *gSpoof = nil;             // per-container spoof prefs
+static NSString *gSpoofSerial = nil;           // derived, stable per container
+static NSString *gSpoofUDID = nil;
 
 static BOOL isMiOSEnabled(void) {
-    NSString *path = @"/var/mobile/Library/Preferences/MiOS/com.mios.core.plist";
-    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:path];
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:
+        @"/var/mobile/Library/Preferences/MiOS/com.mios.core.plist"];
     return [prefs[@"enabled"] boolValue];
 }
 
-static NSDictionary *appPrefs(void) {
-    NSString *bid = currentBundleID();
-    NSString *path = [NSString stringWithFormat:@"/var/mobile/Library/Preferences/MiOS/apps/%@.plist", bid];
+static NSDictionary *appPrefs(NSString *bid) {
+    NSString *path = [NSString stringWithFormat:
+        @"/var/mobile/Library/Preferences/MiOS/apps/%@.plist", bid];
     return [NSDictionary dictionaryWithContentsOfFile:path] ?: @{};
 }
 
-// MARK: - Device Spoof Data
-
-static NSDictionary *cachedDeviceSpoofPrefs(void) {
-    static NSDictionary *prefs = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        prefs = [NSDictionary dictionaryWithContentsOfFile:@"/var/mobile/Library/Preferences/MiOS/com.mios.devicespoof.plist"] ?: @{};
-    });
-    return prefs;
-}
-
 static BOOL deviceSpoofEnabled(void) {
-    return [cachedDeviceSpoofPrefs()[@"enabled"] boolValue];
+    return [gSpoof[@"deviceSpoofEnabled"] boolValue];
 }
 
-static NSString *spoofedDeviceIdentifier(void) {
-    return cachedDeviceSpoofPrefs()[@"deviceIdentifier"] ?: @"";
+static NSString *spoofStr(NSString *key) {
+    id v = gSpoof[key];
+    return [v isKindOfClass:[NSString class]] ? v : @"";
 }
 
-static NSString *spoofedDeviceName(void) {
-    return cachedDeviceSpoofPrefs()[@"deviceName"] ?: @"";
+// MARK: - Home-directory redirect hooks (belt-and-suspenders; CFFIXED_USER_HOME does most of it)
+
+static NSString *(*orig_NSHomeDirectory)(void);
+static NSString *hook_NSHomeDirectory(void) {
+    return gContainerHome ?: orig_NSHomeDirectory();
 }
 
-static NSString *spoofedHWModel(void) {
-    return cachedDeviceSpoofPrefs()[@"hwModel"] ?: @"";
+static NSString *(*orig_NSTemporaryDirectory)(void);
+static NSString *hook_NSTemporaryDirectory(void) {
+    return gContainerTmp ?: orig_NSTemporaryDirectory();
 }
 
-static NSString *spoofedIOSVersion(void) {
-    return cachedDeviceSpoofPrefs()[@"iosVersion"] ?: @"";
+// MARK: - GPS Location Hooks (per container)
+
+static BOOL locationSpoofEnabled(void) {
+    return [gSpoof[@"gpsEnabled"] boolValue];
 }
 
-// MARK: - Per-container spoof prefs (like Ghost)
-
-static NSDictionary *cachedContainerSpoofPrefs(void) {
-    return [[MiOSContainerManager sharedManager] spoofPrefsForBundleID:currentBundleID()] ?: @{};
+static CLLocationCoordinate2D spoofedCoordinate(void) {
+    return CLLocationCoordinate2DMake([gSpoof[@"latitude"] doubleValue], [gSpoof[@"longitude"] doubleValue]);
 }
 
-// MARK: - Container Redirect Hooks
-
-%group ContainerHooks
-
-%hook NSFileManager
-
-- (BOOL)fileExistsAtPath:(NSString *)path {
-    if (!isMiOSEnabled()) return %orig;
-    NSString *redirected = [[MiOSContainerManager sharedManager] redirectedPathForPath:path bundleID:currentBundleID()];
-    if (![redirected isEqualToString:path]) return %orig(redirected);
-    return %orig;
+static CLLocation *spoofedLocationObject(void) {
+    return [[CLLocation alloc] initWithCoordinate:spoofedCoordinate()
+                                         altitude:0
+                               horizontalAccuracy:5.0
+                                 verticalAccuracy:5.0
+                                           course:-1
+                                            speed:-1
+                                        timestamp:[NSDate date]];
 }
-
-- (BOOL)fileExistsAtPath:(NSString *)path isDirectory:(BOOL *)isDirectory {
-    if (!isMiOSEnabled()) return %orig;
-    NSString *redirected = [[MiOSContainerManager sharedManager] redirectedPathForPath:path bundleID:currentBundleID()];
-    if (![redirected isEqualToString:path]) return %orig(redirected, isDirectory);
-    return %orig;
-}
-
-- (NSArray *)contentsOfDirectoryAtPath:(NSString *)path error:(NSError **)error {
-    if (!isMiOSEnabled()) return %orig;
-    NSString *redirected = [[MiOSContainerManager sharedManager] redirectedPathForPath:path bundleID:currentBundleID()];
-    if (![redirected isEqualToString:path]) return %orig(redirected, error);
-    return %orig;
-}
-
-- (NSData *)contentsAtPath:(NSString *)path {
-    if (!isMiOSEnabled()) return %orig;
-    NSString *redirected = [[MiOSContainerManager sharedManager] redirectedPathForPath:path bundleID:currentBundleID()];
-    if (![redirected isEqualToString:path]) return %orig(redirected);
-    return %orig;
-}
-
-- (BOOL)createDirectoryAtPath:(NSString *)path withIntermediateDirectories:(BOOL)flag attributes:(NSDictionary *)attrs error:(NSError **)error {
-    if (!isMiOSEnabled()) return %orig;
-    NSString *redirected = [[MiOSContainerManager sharedManager] redirectedPathForPath:path bundleID:currentBundleID()];
-    if (![redirected isEqualToString:path]) return %orig(redirected, flag, attrs, error);
-    return %orig;
-}
-
-%end
-
-%hook NSData
-
-+ (instancetype)dataWithContentsOfFile:(NSString *)path {
-    if (!isMiOSEnabled()) return %orig;
-    NSString *redirected = [[MiOSContainerManager sharedManager] redirectedPathForPath:path bundleID:currentBundleID()];
-    if (![redirected isEqualToString:path]) return %orig(redirected);
-    return %orig;
-}
-
-%end
-
-%hook NSDictionary
-
-+ (instancetype)dictionaryWithContentsOfFile:(NSString *)path {
-    if (!isMiOSEnabled()) return %orig;
-    NSString *redirected = [[MiOSContainerManager sharedManager] redirectedPathForPath:path bundleID:currentBundleID()];
-    if (![redirected isEqualToString:path]) return %orig(redirected);
-    return %orig;
-}
-
-- (BOOL)writeToFile:(NSString *)path atomically:(BOOL)flag {
-    if (!isMiOSEnabled()) return %orig;
-    NSString *redirected = [[MiOSContainerManager sharedManager] redirectedPathForPath:path bundleID:currentBundleID()];
-    if (![redirected isEqualToString:path]) return %orig(redirected, flag);
-    return %orig;
-}
-
-%end
-
-%hook NSArray
-
-+ (instancetype)arrayWithContentsOfFile:(NSString *)path {
-    if (!isMiOSEnabled()) return %orig;
-    NSString *redirected = [[MiOSContainerManager sharedManager] redirectedPathForPath:path bundleID:currentBundleID()];
-    if (![redirected isEqualToString:path]) return %orig(redirected);
-    return %orig;
-}
-
-%end
-
-%hook NSString
-
-+ (instancetype)stringWithContentsOfFile:(NSString *)path encoding:(NSStringEncoding)enc error:(NSError **)error {
-    if (!isMiOSEnabled()) return %orig;
-    NSString *redirected = [[MiOSContainerManager sharedManager] redirectedPathForPath:path bundleID:currentBundleID()];
-    if (![redirected isEqualToString:path]) return %orig(redirected, enc, error);
-    return %orig;
-}
-
-%end
-
-%hook NSUserDefaults
-
-- (instancetype)initWithSuiteName:(NSString *)suitename {
-    if (!isMiOSEnabled()) return %orig;
-    MiOSContainerModel *active = [[MiOSContainerManager sharedManager] activeContainerForBundleID:currentBundleID()];
-    if (active && !active.isDefault && suitename) {
-        NSString *containerPrefsPath = [active.path stringByAppendingPathComponent:@"Library/Preferences"];
-        NSFileManager *fm = [NSFileManager defaultManager];
-        if (![fm fileExistsAtPath:containerPrefsPath]) {
-            [fm createDirectoryAtPath:containerPrefsPath withIntermediateDirectories:YES attributes:nil error:nil];
-        }
-    }
-    return %orig;
-}
-
-%end
-
-%end // ContainerHooks
-
-// MARK: - GPS Location Hooks
 
 %group LocationHooks
 
 %hook CLLocationManager
 
 - (CLLocation *)location {
-    MiOSLocationManager *locMgr = [MiOSLocationManager sharedManager];
-    if ([locMgr shouldSpoofForBundleID:currentBundleID()]) {
-        return [locMgr spoofedLocation];
-    }
+    if (locationSpoofEnabled()) return spoofedLocationObject();
     return %orig;
 }
 
 - (void)startUpdatingLocation {
     %orig;
-    MiOSLocationManager *locMgr = [MiOSLocationManager sharedManager];
-    if ([locMgr shouldSpoofForBundleID:currentBundleID()]) {
-        id delegate = self.delegate;
-        if (delegate && [delegate respondsToSelector:@selector(locationManager:didUpdateLocations:)]) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [delegate locationManager:self didUpdateLocations:@[[locMgr spoofedLocation]]];
-            });
-        }
+    if (!locationSpoofEnabled()) return;
+    id delegate = self.delegate;
+    if ([delegate respondsToSelector:@selector(locationManager:didUpdateLocations:)]) {
+        CLLocationManager *mgr = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [delegate locationManager:mgr didUpdateLocations:@[spoofedLocationObject()]];
+        });
     }
 }
 
 - (void)requestLocation {
     %orig;
-    MiOSLocationManager *locMgr = [MiOSLocationManager sharedManager];
-    if ([locMgr shouldSpoofForBundleID:currentBundleID()]) {
-        id delegate = self.delegate;
-        if (delegate && [delegate respondsToSelector:@selector(locationManager:didUpdateLocations:)]) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [delegate locationManager:self didUpdateLocations:@[[locMgr spoofedLocation]]];
-            });
-        }
-    }
-}
-
-- (void)startMonitoringSignificantLocationChanges {
-    %orig;
-    MiOSLocationManager *locMgr = [MiOSLocationManager sharedManager];
-    if ([locMgr shouldSpoofForBundleID:currentBundleID()]) {
-        id delegate = self.delegate;
-        if (delegate && [delegate respondsToSelector:@selector(locationManager:didUpdateLocations:)]) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [delegate locationManager:self didUpdateLocations:@[[locMgr spoofedLocation]]];
-            });
-        }
+    if (!locationSpoofEnabled()) return;
+    id delegate = self.delegate;
+    if ([delegate respondsToSelector:@selector(locationManager:didUpdateLocations:)]) {
+        CLLocationManager *mgr = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [delegate locationManager:mgr didUpdateLocations:@[spoofedLocationObject()]];
+        });
     }
 }
 
@@ -257,42 +122,7 @@ static NSDictionary *cachedContainerSpoofPrefs(void) {
 %hook CLLocation
 
 - (CLLocationCoordinate2D)coordinate {
-    MiOSLocationManager *locMgr = [MiOSLocationManager sharedManager];
-    if ([locMgr shouldSpoofForBundleID:currentBundleID()]) {
-        return locMgr.spoofedCoordinate;
-    }
-    return %orig;
-}
-
-- (CLLocationDistance)altitude {
-    MiOSLocationManager *locMgr = [MiOSLocationManager sharedManager];
-    if ([locMgr shouldSpoofForBundleID:currentBundleID()]) {
-        return locMgr.spoofedAltitude;
-    }
-    return %orig;
-}
-
-- (CLLocationSpeed)speed {
-    MiOSLocationManager *locMgr = [MiOSLocationManager sharedManager];
-    if ([locMgr shouldSpoofForBundleID:currentBundleID()]) {
-        return locMgr.spoofedSpeed;
-    }
-    return %orig;
-}
-
-- (CLLocationDirection)course {
-    MiOSLocationManager *locMgr = [MiOSLocationManager sharedManager];
-    if ([locMgr shouldSpoofForBundleID:currentBundleID()]) {
-        return locMgr.spoofedCourse;
-    }
-    return %orig;
-}
-
-- (CLLocationAccuracy)horizontalAccuracy {
-    MiOSLocationManager *locMgr = [MiOSLocationManager sharedManager];
-    if ([locMgr shouldSpoofForBundleID:currentBundleID()]) {
-        return locMgr.spoofedAccuracy;
-    }
+    if (locationSpoofEnabled()) return spoofedCoordinate();
     return %orig;
 }
 
@@ -300,29 +130,21 @@ static NSDictionary *cachedContainerSpoofPrefs(void) {
 
 %end // LocationHooks
 
-// MARK: - Device Spoofing Hooks (like Ghost)
+// MARK: - Device model spoofing (per container)
 
 %group DeviceSpoofHooks
 
 %hook UIDevice
 
 - (NSString *)systemVersion {
-    NSString *ver = spoofedIOSVersion();
+    NSString *ver = spoofStr(@"iosVersion");
     return ver.length > 0 ? ver : %orig;
 }
 
-- (NSString *)model {
-    if (deviceSpoofEnabled() && spoofedDeviceName().length > 0) return @"iPhone";
-    return %orig;
-}
-
-- (NSString *)localizedModel {
-    if (deviceSpoofEnabled() && spoofedDeviceName().length > 0) return @"iPhone";
-    return %orig;
-}
-
 - (NSString *)name {
-    NSString *name = spoofedDeviceName();
+    NSString *custom = spoofStr(@"customDeviceName");
+    if ([gSpoof[@"spoofDeviceName"] boolValue] && custom.length > 0) return custom;
+    NSString *name = spoofStr(@"deviceName");
     return name.length > 0 ? name : %orig;
 }
 
@@ -331,27 +153,14 @@ static NSDictionary *cachedContainerSpoofPrefs(void) {
 %hook NSProcessInfo
 
 - (NSOperatingSystemVersion)operatingSystemVersion {
-    NSString *ver = spoofedIOSVersion();
+    NSString *ver = spoofStr(@"iosVersion");
     if (ver.length > 0) {
         NSArray *parts = [ver componentsSeparatedByString:@"."];
-        NSOperatingSystemVersion v;
-        v.majorVersion = parts.count > 0 ? [parts[0] integerValue] : 0;
-        v.minorVersion = parts.count > 1 ? [parts[1] integerValue] : 0;
-        v.patchVersion = parts.count > 2 ? [parts[2] integerValue] : 0;
+        NSOperatingSystemVersion v = {0, 0, 0};
+        if (parts.count > 0) v.majorVersion = [parts[0] integerValue];
+        if (parts.count > 1) v.minorVersion = [parts[1] integerValue];
+        if (parts.count > 2) v.patchVersion = [parts[2] integerValue];
         return v;
-    }
-    return %orig;
-}
-
-- (BOOL)isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion)version {
-    NSString *ver = spoofedIOSVersion();
-    if (ver.length > 0) {
-        NSOperatingSystemVersion spoofed = [self operatingSystemVersion];
-        if (spoofed.majorVersion > version.majorVersion) return YES;
-        if (spoofed.majorVersion < version.majorVersion) return NO;
-        if (spoofed.minorVersion > version.minorVersion) return YES;
-        if (spoofed.minorVersion < version.minorVersion) return NO;
-        return spoofed.patchVersion >= version.patchVersion;
     }
     return %orig;
 }
@@ -360,20 +169,17 @@ static NSDictionary *cachedContainerSpoofPrefs(void) {
 
 %end // DeviceSpoofHooks
 
-// MARK: - Identifier Spoofing Hooks (per-container, like Ghost)
+// MARK: - Identifier spoofing (per container)
 
 %group IdentifierSpoofHooks
 
 %hook UIDevice
 
 - (NSUUID *)identifierForVendor {
-    NSDictionary *sp = cachedContainerSpoofPrefs();
-    if ([sp[@"spoofVendorID"] boolValue]) {
-        NSString *vid = sp[@"vendorID"];
-        if (vid.length > 0) {
-            NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:vid];
-            if (uuid) return uuid;
-        }
+    if ([gSpoof[@"spoofVendorID"] boolValue]) {
+        NSString *vid = spoofStr(@"vendorID");
+        NSUUID *uuid = vid.length > 0 ? [[NSUUID alloc] initWithUUIDString:vid] : nil;
+        if (uuid) return uuid;
     }
     return %orig;
 }
@@ -383,20 +189,16 @@ static NSDictionary *cachedContainerSpoofPrefs(void) {
 %hook ASIdentifierManager
 
 - (NSUUID *)advertisingIdentifier {
-    NSDictionary *sp = cachedContainerSpoofPrefs();
-    if ([sp[@"spoofAdvertisingID"] boolValue]) {
-        NSString *aid = sp[@"advertisingID"];
-        if (aid.length > 0) {
-            NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:aid];
-            if (uuid) return uuid;
-        }
+    if ([gSpoof[@"spoofAdvertisingID"] boolValue]) {
+        NSString *aid = spoofStr(@"advertisingID");
+        NSUUID *uuid = aid.length > 0 ? [[NSUUID alloc] initWithUUIDString:aid] : nil;
+        if (uuid) return uuid;
     }
     return %orig;
 }
 
 - (BOOL)isAdvertisingTrackingEnabled {
-    NSDictionary *sp = cachedContainerSpoofPrefs();
-    if ([sp[@"spoofAdvertisingID"] boolValue]) return NO;
+    if ([gSpoof[@"spoofAdvertisingID"] boolValue]) return NO;
     return %orig;
 }
 
@@ -404,20 +206,11 @@ static NSDictionary *cachedContainerSpoofPrefs(void) {
 
 %hook DCDevice
 
-- (BOOL)isSupported {
-    NSDictionary *sp = cachedContainerSpoofPrefs();
-    if ([sp[@"spoofDeviceCheck"] boolValue]) return NO;
-    return %orig;
-}
-
 - (void)generateTokenWithCompletionHandler:(void (^)(NSData *, NSError *))completion {
-    NSDictionary *sp = cachedContainerSpoofPrefs();
-    if ([sp[@"spoofDeviceCheck"] boolValue]) {
+    if ([gSpoof[@"spoofDeviceCheck"] boolValue]) {
         if (completion) {
-            NSError *error = [NSError errorWithDomain:@"DCErrorDomain" code:1 userInfo:@{
-                NSLocalizedDescriptionKey: @"DeviceCheck is not supported on this device"
-            }];
-            completion(nil, error);
+            completion(nil, [NSError errorWithDomain:@"DCErrorDomain" code:1 userInfo:@{
+                NSLocalizedDescriptionKey: @"DeviceCheck is not supported on this device"}]);
         }
         return;
     }
@@ -429,8 +222,7 @@ static NSDictionary *cachedContainerSpoofPrefs(void) {
 %hook NSFileManager
 
 - (id)ubiquityIdentityToken {
-    NSDictionary *sp = cachedContainerSpoofPrefs();
-    if ([sp[@"spoofCloudToken"] boolValue]) return nil;
+    if ([gSpoof[@"spoofCloudToken"] boolValue]) return nil;
     return %orig;
 }
 
@@ -438,88 +230,119 @@ static NSDictionary *cachedContainerSpoofPrefs(void) {
 
 %end // IdentifierSpoofHooks
 
-// MARK: - sysctlbyname hook for hw.machine / hw.model
+// MARK: - sysctlbyname (hw.machine / hw.model)
 
 static int (*orig_sysctlbyname)(const char *, void *, size_t *, void *, size_t);
+
+static int copyStringOut(void *oldp, size_t *oldlenp, NSString *value) {
+    const char *cstr = [value UTF8String];
+    size_t len = strlen(cstr) + 1;
+    if (*oldlenp >= len) {
+        memcpy(oldp, cstr, len);
+        *oldlenp = len;
+    }
+    return 0;
+}
 
 static int hook_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     int ret = orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
     if (ret != 0 || !oldp || !oldlenp || !deviceSpoofEnabled()) return ret;
 
-    if (strcmp(name, "hw.machine") == 0) {
-        NSString *ident = spoofedDeviceIdentifier();
-        if (ident.length > 0) {
-            const char *cstr = [ident UTF8String];
-            size_t len = strlen(cstr) + 1;
-            if (*oldlenp >= len) {
-                memcpy(oldp, cstr, len);
-                *oldlenp = len;
-            }
-        }
-    } else if (strcmp(name, "hw.model") == 0) {
-        NSString *hw = spoofedHWModel();
-        if (hw.length > 0) {
-            const char *cstr = [hw UTF8String];
-            size_t len = strlen(cstr) + 1;
-            if (*oldlenp >= len) {
-                memcpy(oldp, cstr, len);
-                *oldlenp = len;
-            }
-        }
+    if (strcmp(name, "hw.machine") == 0 && spoofStr(@"deviceIdentifier").length > 0) {
+        return copyStringOut(oldp, oldlenp, spoofStr(@"deviceIdentifier"));
+    } else if (strcmp(name, "hw.model") == 0 && spoofStr(@"hwModel").length > 0) {
+        return copyStringOut(oldp, oldlenp, spoofStr(@"hwModel"));
     }
     return ret;
 }
 
-// MARK: - MobileGestalt hook
+// MARK: - MobileGestalt
 
 static MGCopyAnswer_t orig_MGCopyAnswer = NULL;
 
 static CFTypeRef hook_MGCopyAnswer(CFStringRef key) {
     if (deviceSpoofEnabled() && key) {
         NSString *k = (__bridge NSString *)key;
-
         if ([k isEqualToString:@"ProductType"] || [k isEqualToString:@"HWModelStr"]) {
-            NSString *ident = spoofedDeviceIdentifier();
-            if (ident.length > 0) return (__bridge_retained CFTypeRef)[ident copy];
-        }
-        if ([k isEqualToString:@"DeviceName"] || [k isEqualToString:@"marketing-name"] || [k isEqualToString:@"UserAssignedDeviceName"]) {
-            NSString *name = spoofedDeviceName();
-            if (name.length > 0) return (__bridge_retained CFTypeRef)[name copy];
-        }
-        if ([k isEqualToString:@"HardwarePlatform"]) {
-            NSString *hw = spoofedHWModel();
-            if (hw.length > 0) return (__bridge_retained CFTypeRef)[hw copy];
-        }
-        if ([k isEqualToString:@"ProductVersion"]) {
-            NSString *ver = spoofedIOSVersion();
-            if (ver.length > 0) return (__bridge_retained CFTypeRef)[ver copy];
+            if (spoofStr(@"deviceIdentifier").length > 0) return (__bridge_retained CFTypeRef)[spoofStr(@"deviceIdentifier") copy];
+        } else if ([k isEqualToString:@"DeviceName"] || [k isEqualToString:@"marketing-name"] || [k isEqualToString:@"UserAssignedDeviceName"]) {
+            if (spoofStr(@"deviceName").length > 0) return (__bridge_retained CFTypeRef)[spoofStr(@"deviceName") copy];
+        } else if ([k isEqualToString:@"HardwarePlatform"]) {
+            if (spoofStr(@"hwModel").length > 0) return (__bridge_retained CFTypeRef)[spoofStr(@"hwModel") copy];
+        } else if ([k isEqualToString:@"ProductVersion"]) {
+            if (spoofStr(@"iosVersion").length > 0) return (__bridge_retained CFTypeRef)[spoofStr(@"iosVersion") copy];
+        } else if (gSpoofSerial && ([k isEqualToString:@"SerialNumber"])) {
+            return (__bridge_retained CFTypeRef)[gSpoofSerial copy];
+        } else if (gSpoofUDID && ([k isEqualToString:@"UniqueDeviceID"] || [k isEqualToString:@"UniqueDeviceIDData"])) {
+            return (__bridge_retained CFTypeRef)[gSpoofUDID copy];
         }
     }
     return orig_MGCopyAnswer ? orig_MGCopyAnswer(key) : NULL;
+}
+
+// MARK: - Derived unique-device identifiers (stable per container)
+
+static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
+    NSString *combined = [NSString stringWithFormat:@"%@-%@", seed ?: @"", salt];
+    unsigned long hash = 1469598103934665603UL; // FNV-1a-ish, deterministic
+    const char *bytes = combined.UTF8String;
+    for (NSUInteger i = 0; bytes[i]; i++) { hash ^= (unsigned char)bytes[i]; hash *= 1099511628211UL; }
+    NSMutableString *out = [NSMutableString string];
+    const char *alphabet = "0123456789ABCDEF";
+    for (NSUInteger i = 0; i < length; i++) {
+        [out appendFormat:@"%c", alphabet[(hash >> ((i % 15) * 4)) & 0xF]];
+        hash = hash * 6364136223846793005UL + 1442695040888963407UL;
+    }
+    return out;
 }
 
 // MARK: - Constructor
 
 %ctor {
     @autoreleasepool {
+        gBundleID = [[NSBundle mainBundle] bundleIdentifier];
+        if (gBundleID.length == 0 || [gBundleID isEqualToString:@"com.mios.app"]) return;
+
+        // Grant the sandbox extension first so the central MiOS folder is reachable.
+        void *sandyHandle = dlopen("/usr/lib/libsandy.dylib", RTLD_LAZY);
+        if (!sandyHandle) sandyHandle = dlopen("/var/jb/usr/lib/libsandy.dylib", RTLD_LAZY);
+        if (sandyHandle) {
+            libSandy_applyProfile_t applyProfile = (libSandy_applyProfile_t)dlsym(sandyHandle, "libSandy_applyProfile");
+            if (applyProfile) applyProfile("MiOS-Profile");
+        }
+
         if (!isMiOSEnabled()) return;
 
-        NSString *bid = currentBundleID();
-        if ([bid isEqualToString:@"com.mios.app"]) return;
+        MiOSContainerManager *mgr = [MiOSContainerManager sharedManager];
+        BOOL containerEnabled = [appPrefs(gBundleID)[@"containerEnabled"] boolValue];
+        NSString *uuid = [mgr activeContainerUUIDForBundleID:gBundleID];
 
-        applySandyProfile("MiOS-Profile");
-
-        NSDictionary *prefs = appPrefs();
-        BOOL containerEnabled = [prefs[@"containerEnabled"] boolValue];
-        BOOL locationEnabled = [[MiOSLocationManager sharedManager] shouldSpoofForBundleID:bid];
-
-        if (containerEnabled) {
-            %init(ContainerHooks);
+        // 1. Redirect the whole home directory into the container (the Crane/LiveContainer core).
+        if (containerEnabled && uuid) {
+            NSString *home = [mgr homePathForBundleID:gBundleID ensureCreated:YES];
+            if (home.length > 0) {
+                gContainerHome = home;
+                gContainerTmp = [home stringByAppendingPathComponent:@"tmp"];
+                setenv("CFFIXED_USER_HOME", home.UTF8String, 1);
+                setenv("HOME", home.UTF8String, 1);
+                setenv("TMPDIR", gContainerTmp.UTF8String, 1);
+                MSHookFunction((void *)NSHomeDirectory, (void *)hook_NSHomeDirectory, (void **)&orig_NSHomeDirectory);
+                MSHookFunction((void *)NSTemporaryDirectory, (void *)hook_NSTemporaryDirectory, (void **)&orig_NSTemporaryDirectory);
+            }
         }
 
-        if (locationEnabled) {
+        // 2. Per-container spoof: device model, identifiers, GPS.
+        gSpoof = [mgr spoofPrefsForBundleID:gBundleID];
+        if (uuid) {
+            gSpoofSerial = derivedHex(uuid, @"serial", 11);
+            gSpoofUDID = derivedHex(uuid, @"udid", 25);
+        }
+
+        if (locationSpoofEnabled()) {
             %init(LocationHooks);
         }
+
+        %init(IdentifierSpoofHooks);
 
         if (deviceSpoofEnabled()) {
             %init(DeviceSpoofHooks);
@@ -530,12 +353,8 @@ static CFTypeRef hook_MGCopyAnswer(CFStringRef key) {
             if (!mgHandle) mgHandle = dlopen("/var/jb/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
             if (mgHandle) {
                 MGCopyAnswer_t mgFn = (MGCopyAnswer_t)dlsym(mgHandle, "MGCopyAnswer");
-                if (mgFn) {
-                    MSHookFunction((void *)mgFn, (void *)hook_MGCopyAnswer, (void **)&orig_MGCopyAnswer);
-                }
+                if (mgFn) MSHookFunction((void *)mgFn, (void *)hook_MGCopyAnswer, (void **)&orig_MGCopyAnswer);
             }
         }
-
-        %init(IdentifierSpoofHooks);
     }
 }

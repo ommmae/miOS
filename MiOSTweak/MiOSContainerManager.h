@@ -1,22 +1,18 @@
 #import <Foundation/Foundation.h>
 
-@interface MiOSContainerModel : NSObject
-@property (nonatomic, copy) NSString *identifier;
-@property (nonatomic, copy) NSString *name;
-@property (nonatomic, copy) NSString *bundleID;
-@property (nonatomic, assign) BOOL isDefault;
-@property (nonatomic, copy) NSString *path;
-- (instancetype)initWithIdentifier:(NSString *)identifier name:(NSString *)name bundleID:(NSString *)bundleID;
-@end
-
+// Resolves the active container for the current app and the home path to redirect into.
+// Containers live centrally so both the companion app and the injected tweak can reach them
+// (the libSandy "MiOS-Profile" grants RW to /var/mobile/Library/Preferences/MiOS).
 @interface MiOSContainerManager : NSObject
 + (instancetype)sharedManager;
-- (NSArray<MiOSContainerModel *> *)containersForBundleID:(NSString *)bundleID;
-- (MiOSContainerModel *)activeContainerForBundleID:(NSString *)bundleID;
-- (MiOSContainerModel *)createContainerForBundleID:(NSString *)bundleID name:(NSString *)name;
-- (BOOL)switchToContainer:(NSString *)containerID forBundleID:(NSString *)bundleID;
-- (BOOL)deleteContainer:(NSString *)containerID forBundleID:(NSString *)bundleID;
-- (NSString *)redirectedPathForPath:(NSString *)originalPath bundleID:(NSString *)bundleID;
-- (void)setupContainerDirectories:(NSString *)containerPath;
+
+// The active container UUID for a bundle id, or nil when it is the default (no redirect).
+- (NSString *)activeContainerUUIDForBundleID:(NSString *)bundleID;
+
+// Absolute path of the container that HOME should point at, or nil for the default container.
+// When create is YES the home-directory skeleton (Documents/Library/tmp/...) is created.
+- (NSString *)homePathForBundleID:(NSString *)bundleID ensureCreated:(BOOL)create;
+
+// Per-container spoof settings (device model, identifiers, GPS); empty for the default container.
 - (NSDictionary *)spoofPrefsForBundleID:(NSString *)bundleID;
 @end

@@ -2,6 +2,13 @@
 
 static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/MiOS/com.mios.containers.plist";
 
+@interface MiOSContainerConfig ()
++ (NSString *)basePath;
++ (NSString *)containerDirForBundleID:(NSString *)bundleID uuid:(NSString *)uuid;
+- (void)removeFromSystem;
+- (NSDictionary *)spoofPrefsDictionary;
+@end
+
 @implementation MiOSContainerConfig
 
 #pragma mark - Class Methods
@@ -109,10 +116,8 @@ static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/
         if ([activeContainers[bundleID] isEqualToString:self.identifier]) {
             [activeContainers removeObjectForKey:bundleID];
         }
-        NSString *appDataPath = [self _findDataPathForBundleID:bundleID];
-        if (appDataPath && self.identifier.length > 0) {
-            NSString *containerDir = [[appDataPath stringByAppendingPathComponent:@"___MiOS_Containers"]
-                                      stringByAppendingPathComponent:self.identifier];
+        if (self.identifier.length > 0) {
+            NSString *containerDir = [[self class] containerDirForBundleID:bundleID uuid:self.identifier];
             [fm removeItemAtPath:containerDir error:nil];
         }
     }
@@ -187,92 +192,29 @@ static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/
 
 #pragma mark - Apply to System
 
-- (void)applyToSystem {
-    NSFileManager *fm = [NSFileManager defaultManager];
++ (NSString *)basePath {
+    return @"/var/mobile/Library/Preferences/MiOS";
+}
 
-    for (NSString *bundleID in self.apps) {
-        // 1. Write per-app plist to enable container
-        NSString *appPlistDir = @"/var/mobile/Library/Preferences/MiOS/apps";
-        [fm createDirectoryAtPath:appPlistDir withIntermediateDirectories:YES attributes:nil error:nil];
-        NSString *appPlistPath = [appPlistDir stringByAppendingPathComponent:
-                                  [NSString stringWithFormat:@"%@.plist", bundleID]];
-        NSDictionary *appPrefs = @{
-            @"containerEnabled": @YES,
-            @"enabled": @YES,
-        };
-        [appPrefs writeToFile:appPlistPath atomically:YES];
+// Central, sandbox-reachable location (libSandy grants RW to the MiOS base path).
++ (NSString *)containerDirForBundleID:(NSString *)bundleID uuid:(NSString *)uuid {
+    return [[[[self basePath] stringByAppendingPathComponent:@"Containers"]
+             stringByAppendingPathComponent:bundleID]
+            stringByAppendingPathComponent:uuid];
+}
 
-        // 2. Find the app's data container path
-        NSString *appDataPath = [self _findDataPathForBundleID:bundleID];
-        if (!appDataPath) continue;
-
-        // 3. Create container directory structure
-        NSString *containerBase = [appDataPath stringByAppendingPathComponent:@"___MiOS_Containers"];
-        NSString *containerDir = [containerBase stringByAppendingPathComponent:self.identifier];
-
-        NSArray *subdirs = @[
-            @"Documents",
-            @"Library",
-            @"Library/Preferences",
-            @"Library/Caches",
-            @"Library/Application Support",
-            @"Library/SplashBoard",
-            @"SystemData",
-            @"tmp",
-        ];
-        for (NSString *subdir in subdirs) {
-            NSString *fullPath = [containerDir stringByAppendingPathComponent:subdir];
-            [fm createDirectoryAtPath:fullPath withIntermediateDirectories:YES attributes:nil error:nil];
-        }
-
-        // 4. Write container metadata plist
-        NSString *metaPlistPath = [containerDir stringByAppendingPathComponent:@".mios_container_meta.plist"];
-        NSDictionary *meta = @{
-            @"name": self.name ?: @"",
-            @"createdAt": [NSDate date].description,
-            @"bundleID": bundleID,
-        };
-        [meta writeToFile:metaPlistPath atomically:YES];
-
-        // 5. Write spoof preferences plist
-        NSString *spoofPlistPath = [containerDir stringByAppendingPathComponent:@".mios_spoof_prefs.plist"];
-        NSDictionary *spoofPrefs = @{
-            @"spoofDeviceCheck": @(self.spoofDeviceCheck),
-            @"spoofVendorID": @(self.spoofVendorID),
-            @"vendorID": self.vendorID ?: @"",
-            @"spoofAdvertisingID": @(self.spoofAdvertisingID),
-            @"advertisingID": self.advertisingID ?: @"",
-            @"spoofCloudToken": @(self.spoofCloudToken),
-            @"gpsEnabled": @(self.gpsEnabled),
-            @"latitude": @(self.latitude),
-            @"longitude": @(self.longitude),
-            @"deviceSpoofEnabled": @(self.deviceSpoofEnabled),
-            @"deviceIdentifier": self.deviceIdentifier ?: @"",
-            @"deviceName": self.deviceName ?: @"",
-            @"hwModel": self.hwModel ?: @"",
-            @"iosVersion": self.iosVersion ?: @"",
-            @"storageSizeGB": @(self.storageSizeGB),
-            @"customDeviceName": self.customDeviceName ?: @"",
-            @"spoofDeviceName": @(self.spoofDeviceName),
-        };
-        [spoofPrefs writeToFile:spoofPlistPath atomically:YES];
-
-        // 6. Update active containers mapping
-        NSString *containerPrefsPath = @"/var/mobile/Library/Preferences/MiOS/com.mios.containerprefs.plist";
-        [fm createDirectoryAtPath:[containerPrefsPath stringByDeletingLastPathComponent]
-      withIntermediateDirectories:YES attributes:nil error:nil];
-        NSMutableDictionary *containerPrefs = [NSMutableDictionary dictionaryWithContentsOfFile:containerPrefsPath] ?: [NSMutableDictionary dictionary];
-        NSMutableDictionary *activeContainers = [NSMutableDictionary dictionaryWithDictionary:containerPrefs[@"activeContainers"] ?: @{}];
-        activeContainers[bundleID] = self.identifier;
-        containerPrefs[@"activeContainers"] = activeContainers;
-        [containerPrefs writeToFile:containerPrefsPath atomically:YES];
-    }
-
-    // 7. Write device spoof prefs
-    NSString *deviceSpoofPath = @"/var/mobile/Library/Preferences/MiOS/com.mios.devicespoof.plist";
-    [[self class] _ensureDirectoryForPath:deviceSpoofPath];
-    NSDictionary *deviceSpoofPrefs = @{
-        @"enabled": @(self.deviceSpoofEnabled),
+- (NSDictionary *)spoofPrefsDictionary {
+    return @{
+        @"spoofDeviceCheck": @(self.spoofDeviceCheck),
+        @"spoofVendorID": @(self.spoofVendorID),
+        @"vendorID": self.vendorID ?: @"",
+        @"spoofAdvertisingID": @(self.spoofAdvertisingID),
+        @"advertisingID": self.advertisingID ?: @"",
+        @"spoofCloudToken": @(self.spoofCloudToken),
+        @"gpsEnabled": @(self.gpsEnabled),
+        @"latitude": @(self.latitude),
+        @"longitude": @(self.longitude),
+        @"deviceSpoofEnabled": @(self.deviceSpoofEnabled),
         @"deviceIdentifier": self.deviceIdentifier ?: @"",
         @"deviceName": self.deviceName ?: @"",
         @"hwModel": self.hwModel ?: @"",
@@ -281,37 +223,45 @@ static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/
         @"customDeviceName": self.customDeviceName ?: @"",
         @"spoofDeviceName": @(self.spoofDeviceName),
     };
-    [deviceSpoofPrefs writeToFile:deviceSpoofPath atomically:YES];
-
-    // 8. Write GPS prefs
-    NSString *gpsPrefsPath = @"/var/mobile/Library/Preferences/MiOS/com.mios.locationprefs.plist";
-    [[self class] _ensureDirectoryForPath:gpsPrefsPath];
-    NSDictionary *gpsPrefs = @{
-        @"enabled": @(self.gpsEnabled),
-        @"latitude": @(self.latitude),
-        @"longitude": @(self.longitude),
-    };
-    [gpsPrefs writeToFile:gpsPrefsPath atomically:YES];
 }
 
-#pragma mark - Private Helpers
-
-- (NSString *)_findDataPathForBundleID:(NSString *)bundleID {
+- (void)applyToSystem {
     NSFileManager *fm = [NSFileManager defaultManager];
-    NSString *containersPath = @"/var/mobile/Containers/Data/Application";
+    NSString *base = [[self class] basePath];
+    NSString *appPlistDir = [base stringByAppendingPathComponent:@"apps"];
+    [fm createDirectoryAtPath:appPlistDir withIntermediateDirectories:YES attributes:nil error:nil];
 
-    NSArray *uuids = [fm contentsOfDirectoryAtPath:containersPath error:nil];
-    for (NSString *uuid in uuids) {
-        NSString *uuidPath = [containersPath stringByAppendingPathComponent:uuid];
-        NSString *metadataPath = [uuidPath stringByAppendingPathComponent:
-                                  @".com.apple.mobile_container_manager.metadata.plist"];
-        NSDictionary *metadata = [NSDictionary dictionaryWithContentsOfFile:metadataPath];
-        NSString *identifier = metadata[@"MCMMetadataIdentifier"];
-        if ([identifier isEqualToString:bundleID]) {
-            return uuidPath;
+    NSString *containerPrefsPath = [base stringByAppendingPathComponent:@"com.mios.containerprefs.plist"];
+    NSMutableDictionary *containerPrefs = [NSMutableDictionary dictionaryWithContentsOfFile:containerPrefsPath] ?: [NSMutableDictionary dictionary];
+    NSMutableDictionary *activeContainers = [NSMutableDictionary dictionaryWithDictionary:containerPrefs[@"activeContainers"] ?: @{}];
+
+    NSDictionary *spoofPrefs = [self spoofPrefsDictionary];
+
+    for (NSString *bundleID in self.apps) {
+        // Mark the app as managed by MiOS.
+        NSString *appPlistPath = [appPlistDir stringByAppendingPathComponent:
+                                  [NSString stringWithFormat:@"%@.plist", bundleID]];
+        [@{@"containerEnabled": @YES, @"enabled": @YES} writeToFile:appPlistPath atomically:YES];
+
+        // Create the container skeleton centrally (the tweak redirects HOME here).
+        NSString *containerDir = [[self class] containerDirForBundleID:bundleID uuid:self.identifier];
+        NSArray *subdirs = @[@"Documents", @"Library", @"Library/Preferences", @"Library/Caches",
+                             @"Library/Application Support", @"Library/Cookies", @"Library/SplashBoard",
+                             @"SystemData", @"tmp", @"StoreKit"];
+        for (NSString *subdir in subdirs) {
+            [fm createDirectoryAtPath:[containerDir stringByAppendingPathComponent:subdir]
+          withIntermediateDirectories:YES attributes:nil error:nil];
         }
+
+        [@{@"name": self.name ?: @"", @"createdAt": [NSDate date].description, @"bundleID": bundleID}
+            writeToFile:[containerDir stringByAppendingPathComponent:@".mios_container_meta.plist"] atomically:YES];
+        [spoofPrefs writeToFile:[containerDir stringByAppendingPathComponent:@".mios_spoof_prefs.plist"] atomically:YES];
+
+        activeContainers[bundleID] = self.identifier;
     }
-    return nil;
+
+    containerPrefs[@"activeContainers"] = activeContainers;
+    [containerPrefs writeToFile:containerPrefsPath atomically:YES];
 }
 
 @end
