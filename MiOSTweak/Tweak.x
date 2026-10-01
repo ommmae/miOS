@@ -7,6 +7,8 @@
 #import <sys/sysctl.h>
 #import <sys/utsname.h>
 #import <errno.h>
+#import <mach-o/dyld.h>
+#import "fishhook.h"
 #import "MiOSContainerManager.h"
 
 // MARK: - Private declarations
@@ -59,6 +61,11 @@ static char     *gcModel    = NULL;   // hw.model                    (hwModel)
 static uint64_t  gcMemsize  = 0;      // 0 = leave as-is
 static int       gcCPU      = 0;      // 0 = leave as-is
 static CFDictionaryRef gcWifiInfo     = NULL;   // pre-built SSID/BSSID dict; NULL = don't spoof
+// MobileGestalt values, spoofed ONLY for the app's own images via fishhook (never a global hook).
+static CFStringRef gcMGProductType    = NULL;   // ProductType / HWModelStr  (deviceIdentifier)
+static CFStringRef gcMGHWModel        = NULL;   // HardwarePlatform          (hwModel)
+static CFStringRef gcMGDeviceName     = NULL;   // DeviceName / marketing-name
+static CFStringRef gcMGProductVersion = NULL;   // ProductVersion            (iosVersion)
 
 // Defined lower down; used by the derivation helpers below.
 static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length);
@@ -605,6 +612,45 @@ static CFDictionaryRef hook_CNCopyCurrentNetworkInfo(CFStringRef interfaceName) 
     return orig_CNCopyCurrentNetworkInfo ? orig_CNCopyCurrentNetworkInfo(interfaceName) : NULL;
 }
 
+// MARK: - MobileGestalt, spoofed ONLY for the app's own images (via fishhook symbol rebinding).
+// This never touches the real MGCopyAnswer, so CoreTelephony's hasBaseband() and jailbreak-bypass
+// tweaks (Shadow) that also hook it are unaffected — that is what caused the earlier EXC_GUARD /
+// EXC_BREAKPOINT crashes when MGCopyAnswer was hooked globally with MSHookFunction.
+static CFTypeRef (*real_MGCopyAnswer)(CFStringRef) = NULL;
+
+static CFTypeRef fish_MGCopyAnswer(CFStringRef key) {
+    if (gDeviceSpoofActive && key) {
+        if (gcMGProductType && (CFEqual(key, CFSTR("ProductType")) || CFEqual(key, CFSTR("HWModelStr"))))
+            return CFRetain(gcMGProductType);
+        if (gcMGDeviceName && (CFEqual(key, CFSTR("DeviceName")) || CFEqual(key, CFSTR("marketing-name")) || CFEqual(key, CFSTR("UserAssignedDeviceName"))))
+            return CFRetain(gcMGDeviceName);
+        if (gcMGHWModel && CFEqual(key, CFSTR("HardwarePlatform")))
+            return CFRetain(gcMGHWModel);
+        if (gcMGProductVersion && CFEqual(key, CFSTR("ProductVersion")))
+            return CFRetain(gcMGProductVersion);
+    }
+    if (real_MGCopyAnswer) return real_MGCopyAnswer(key);
+    return NULL;
+}
+
+// Rebind MGCopyAnswer only in the main executable and frameworks inside the app bundle. System
+// libraries (CoreTelephony, libMobileGestalt, the JB prefix) are left alone.
+static void miosRebindMGForAppImages(void) {
+    if (!gcMGProductType && !gcMGProductVersion && !gcMGDeviceName && !gcMGHWModel) return;
+    NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
+    if (bundlePath.length == 0) return;
+    const char *prefix = bundlePath.UTF8String;
+    struct rebinding r = { "MGCopyAnswer", (void *)fish_MGCopyAnswer, (void **)&real_MGCopyAnswer };
+    uint32_t count = _dyld_image_count();
+    for (uint32_t i = 0; i < count; i++) {
+        const char *name = _dyld_get_image_name(i);
+        if (!name) continue;
+        // Only images that live inside the app bundle (main binary + embedded frameworks).
+        if (strncmp(name, prefix, strlen(prefix)) != 0) continue;
+        rebind_symbols_image((void *)_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i), &r, 1);
+    }
+}
+
 // MARK: - Derived unique-device identifiers (stable per container)
 
 static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
@@ -629,6 +675,11 @@ static char *dupCString(NSString *s) {
     return c ? strdup(c) : NULL;
 }
 
+static CFStringRef retainedCF(NSString *s) {
+    if (s.length == 0) return NULL;
+    return (__bridge_retained CFStringRef)[s copy];
+}
+
 static void miosBuildSpoofCache(void) {
     gDeviceSpoofActive = deviceSpoofEnabled();
     if (gDeviceSpoofActive) {
@@ -636,6 +687,10 @@ static void miosBuildSpoofCache(void) {
         gcModel   = dupCString(spoofStr(@"hwModel"));
         gcMemsize = spoofedMemsize();
         gcCPU     = (int)spoofedCPUCores();
+        gcMGProductType    = retainedCF(spoofStr(@"deviceIdentifier"));
+        gcMGHWModel        = retainedCF(spoofStr(@"hwModel"));
+        gcMGDeviceName     = retainedCF(spoofStr(@"deviceName"));
+        gcMGProductVersion = retainedCF(spoofStr(@"iosVersion"));
     }
     if (wifiSpoofActive()) {
         NSString *ssid  = derivedSSID();
@@ -719,6 +774,10 @@ static void miosBuildSpoofCache(void) {
             char b1[64] = {0}; size_t s1 = sizeof(b1);
             sysctlbyname("hw.machine", b1, &s1, NULL, 0);
             selfTestAfter = @(b1);
+
+            // MGCopyAnswer: rebind it ONLY inside the app's own images (safe; no global hook).
+            // This is what actually spoofs model/iOS for apps like Instagram that read MobileGestalt.
+            miosRebindMGForAppImages();
         }
 
         // Extra probes: what does uname() report, and what does MGCopyAnswer("ProductType") report?
