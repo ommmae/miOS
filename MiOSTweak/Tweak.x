@@ -6,6 +6,7 @@
 #import <dlfcn.h>
 #import <sys/sysctl.h>
 #import <sys/utsname.h>
+#import <errno.h>
 #import "MiOSContainerManager.h"
 
 // MARK: - Private declarations
@@ -536,15 +537,22 @@ static void miosInitKeychainNamespace(void) {
 // UIDevice / NSProcessInfo ObjC hooks) is what apps actually read for the device model anyway.
 
 static int (*orig_sysctlbyname)(const char *, void *, size_t *, void *, size_t);
+static int (*orig_sysctl)(int *, u_int, void *, size_t *, void *, size_t);
 static int (*orig_uname)(struct utsname *);
 static CNCopyCurrentNetworkInfo_t orig_CNCopyCurrentNetworkInfo = NULL;
 
-static int copyCStringOut(void *oldp, size_t *oldlenp, const char *cstr) {
-    size_t len = strlen(cstr) + 1;
-    if (*oldlenp >= len) {
-        memcpy(oldp, cstr, len);
-        *oldlenp = len;
+// Return a C string for a sysctl query, correctly handling the length-probe (oldp == NULL) call that
+// callers make first to size their buffer — we must report the SPOOFED length, not the real one, or a
+// longer spoofed value silently falls back to the real string.
+static int replyCString(void *oldp, size_t *oldlenp, const char *cstr) {
+    size_t need = strlen(cstr) + 1;
+    if (!oldp) {                 // length probe
+        if (oldlenp) *oldlenp = need;
+        return 0;
     }
+    if (oldlenp && *oldlenp < need) { errno = ENOMEM; return -1; }
+    memcpy(oldp, cstr, need);
+    if (oldlenp) *oldlenp = need;
     return 0;
 }
 
@@ -556,21 +564,32 @@ static int copyIntOut(void *oldp, size_t *oldlenp, unsigned long long value) {
 }
 
 static int hook_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
-    int ret = orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
-    if (ret != 0 || !oldp || !oldlenp || !name || !gDeviceSpoofActive) return ret;
-
-    if (gcMachine && strcmp(name, "hw.machine") == 0) {
-        return copyCStringOut(oldp, oldlenp, gcMachine);
-    } else if (gcModel && strcmp(name, "hw.model") == 0) {
-        return copyCStringOut(oldp, oldlenp, gcModel);
-    } else if (gcMemsize && strcmp(name, "hw.memsize") == 0) {
-        return copyIntOut(oldp, oldlenp, gcMemsize);
-    } else if (gcCPU && (strcmp(name, "hw.ncpu") == 0 || strcmp(name, "hw.logicalcpu") == 0 ||
-               strcmp(name, "hw.logicalcpu_max") == 0 || strcmp(name, "hw.activecpu") == 0 ||
-               strcmp(name, "hw.physicalcpu") == 0 || strcmp(name, "hw.physicalcpu_max") == 0)) {
-        return copyIntOut(oldp, oldlenp, (unsigned long long)gcCPU);
+    if (name && gDeviceSpoofActive) {
+        if (gcMachine && strcmp(name, "hw.machine") == 0) return replyCString(oldp, oldlenp, gcMachine);
+        if (gcModel   && strcmp(name, "hw.model")   == 0) return replyCString(oldp, oldlenp, gcModel);
+        if ((gcMemsize || gcCPU) && oldp && oldlenp) {
+            int ret = orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
+            if (ret != 0) return ret;
+            if (gcMemsize && strcmp(name, "hw.memsize") == 0) return copyIntOut(oldp, oldlenp, gcMemsize);
+            if (gcCPU && (strcmp(name, "hw.ncpu") == 0 || strcmp(name, "hw.logicalcpu") == 0 ||
+                strcmp(name, "hw.logicalcpu_max") == 0 || strcmp(name, "hw.activecpu") == 0 ||
+                strcmp(name, "hw.physicalcpu") == 0 || strcmp(name, "hw.physicalcpu_max") == 0)) {
+                return copyIntOut(oldp, oldlenp, (unsigned long long)gcCPU);
+            }
+            return ret;
+        }
     }
-    return ret;
+    return orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
+}
+
+// Raw MIB form: sysctl({CTL_HW, HW_MACHINE/HW_MODEL}, ...). Some device-model readers use this
+// directly instead of sysctlbyname.
+static int hook_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    if (name && namelen >= 2 && gDeviceSpoofActive && name[0] == CTL_HW) {
+        if (gcMachine && name[1] == HW_MACHINE) return replyCString(oldp, oldlenp, gcMachine);
+        if (gcModel   && name[1] == HW_MODEL)   return replyCString(oldp, oldlenp, gcModel);
+    }
+    return orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
 }
 
 static int hook_uname(struct utsname *buf) {
@@ -687,6 +706,7 @@ static void miosBuildSpoofCache(void) {
             // hook MGCopyAnswer: CoreTelephony calls it during init (hasBaseband) and hooking it
             // trips an EXC_BREAKPOINT trap there — Ghost only reads MGCopyAnswer, never replaces it.
             MSHookFunction((void *)sysctlbyname, (void *)hook_sysctlbyname, (void **)&orig_sysctlbyname);
+            MSHookFunction((void *)sysctl, (void *)hook_sysctl, (void **)&orig_sysctl);
             MSHookFunction((void *)uname, (void *)hook_uname, (void **)&orig_uname);
         }
 
