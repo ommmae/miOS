@@ -1,11 +1,11 @@
-name: Build miOS .deb
+name: Build miOS for Instagram
 
 on:
   push:
     branches:
       - "claude/**"
       - main
-  workflow_dispatch:   # lets you trigger a build manually from the Actions tab
+  workflow_dispatch:
 
 jobs:
   build:
@@ -17,12 +17,30 @@ jobs:
       - name: Install Theos
         uses: Randomblock1/theos-action@v1
 
-      - name: Build package (rootless)
+      # Rootless .deb for jailbroken installs.
+      - name: Build .deb (rootless)
         run: make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+
+      # Standalone fat .dylib ready to drop into an Instagram IPA (see docs/INJECTION.md).
+      - name: Build .dylib for IPA injection
+        run: make FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+
+      - name: Stage dylib artifact
+        run: |
+          mkdir -p dylib
+          cp .theos/obj/miOS.dylib dylib/miOS.dylib
+          cp miOS.plist dylib/miOS.plist
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
           name: miOS-deb
           path: packages/*.deb
+          if-no-files-found: error
+
+      - name: Upload .dylib artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: miOS-dylib
+          path: dylib/*
           if-no-files-found: error
