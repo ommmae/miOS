@@ -27,7 +27,6 @@ typedef CFTypeRef (*MGCopyAnswer_t)(CFStringRef key);
 
 static NSString *gBundleID = nil;
 static NSString *gContainerHome = nil;         // redirected HOME, or nil for the default container
-static NSString *gContainerTmp = nil;
 static NSDictionary *gSpoof = nil;             // per-container spoof prefs
 static NSString *gSpoofSerial = nil;           // derived, stable per container
 static NSString *gSpoofUDID = nil;
@@ -54,18 +53,6 @@ static BOOL deviceSpoofEnabled(void) {
 static NSString *spoofStr(NSString *key) {
     id v = gSpoof[key];
     return [v isKindOfClass:[NSString class]] ? v : @"";
-}
-
-// MARK: - Home-directory redirect hooks (belt-and-suspenders; CFFIXED_USER_HOME does most of it)
-
-static NSString *(*orig_NSHomeDirectory)(void);
-static NSString *hook_NSHomeDirectory(void) {
-    return gContainerHome ?: orig_NSHomeDirectory();
-}
-
-static NSString *(*orig_NSTemporaryDirectory)(void);
-static NSString *hook_NSTemporaryDirectory(void) {
-    return gContainerTmp ?: orig_NSTemporaryDirectory();
 }
 
 // MARK: - GPS Location Hooks (per container)
@@ -485,12 +472,10 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
             }
             if (writable) {
                 gContainerHome = home;
-                gContainerTmp = [home stringByAppendingPathComponent:@"tmp"];
+                // Exactly like LiveContainer: only the two env vars, and do NOT touch TMPDIR or
+                // inline-hook NSHomeDirectory (that can deadlock CoreFoundation during launch).
                 setenv("CFFIXED_USER_HOME", home.UTF8String, 1);
                 setenv("HOME", home.UTF8String, 1);
-                setenv("TMPDIR", gContainerTmp.UTF8String, 1);
-                MSHookFunction((void *)NSHomeDirectory, (void *)hook_NSHomeDirectory, (void **)&orig_NSHomeDirectory);
-                MSHookFunction((void *)NSTemporaryDirectory, (void *)hook_NSTemporaryDirectory, (void **)&orig_NSTemporaryDirectory);
 
                 // Per-container preferences and keychain (opt-in; so each container is its own account).
                 if (gPrefsIsolation) miosInitPrefsRedirect();
