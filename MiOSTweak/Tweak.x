@@ -851,6 +851,13 @@ static void miosBuildSpoofCache(void) {
             dbg[@"probe_UIDevice_systemVersion"] = uiSystemVersion; // should be spoofed iOS if UIDevice hook works
             dbg[@"probe_MGCopyAnswer_ProductType"] = mgProductType; // real (we don't hook MG) — is this what IG uses?
             dbg[@"probe_MGCopyAnswer_ProductVersion"] = mgProductVersion;
+            // App Group container paths as seen by the app — shows whether group isolation reached us.
+            NSMutableDictionary *grp = [NSMutableDictionary dictionary];
+            for (NSString *gid in @[@"group.com.burbn.instagram", @"group.com.facebook.family"]) {
+                NSURL *u = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:gid];
+                grp[gid] = u ? u.path : @"(nil)";
+            }
+            dbg[@"appGroupContainers"] = grp;
             dbg[@"spoofKeys"] = [gSpoof allKeys] ?: @[];
             dbg[@"ts"] = [NSDate date].description;
             [dbg writeToFile:[NSHomeDirectory() stringByAppendingPathComponent:@"Documents/mios_debug.plist"] atomically:YES];

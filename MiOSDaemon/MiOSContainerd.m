@@ -173,6 +173,21 @@ static NSArray<NSString *> *appGroupsForBundleID(NSString *bid) {
     return [g isKindOfClass:[NSArray class]] ? g : @[];
 }
 
+// --- Debug log (so we can see what the root daemon actually did) ---
+static void dlog(NSString *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    NSString *line = [[NSString alloc] initWithFormat:fmt arguments:ap];
+    va_end(ap);
+    NSString *dir = [kBase stringByAppendingPathComponent:@"debug"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *path = [dir stringByAppendingPathComponent:@"daemon.log"];
+    NSString *stamped = [NSString stringWithFormat:@"%@  %@\n", [NSDate date], line];
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (!fh) { [stamped writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]; }
+    else { @try { [fh seekToEndOfFile]; [fh writeData:[stamped dataUsingEncoding:NSUTF8StringEncoding]]; } @catch (__unused id e) {} [fh closeFile]; }
+    chown(path.UTF8String, 501, 501);
+}
+
 static NSString *reqPath(void)  { return [kBase stringByAppendingPathComponent:@"daemon_request.plist"]; }
 static NSString *respPath(NSString *token) {
     return [kBase stringByAppendingPathComponent:[NSString stringWithFormat:@"daemon_response_%@.plist", token]];
@@ -247,7 +262,9 @@ static MCMContainer *groupContainerForUUID(NSString *groupID, NSString *uuidStr,
 // state that lives in the group container (e.g. Instagram's device header in FBFamilySharedUserDefaults)
 // is isolated per container and a fresh container really starts empty.
 static void switchGroupContainers(NSString *bid, NSString *lid, MCMContainerManager *mgr) {
-    for (NSString *g in appGroupsForBundleID(bid)) {
+    NSArray *groups = appGroupsForBundleID(bid);
+    dlog(@"[groups] %@ -> %@ sharedClass=%@", bid, groups, MCMSharedDataClass() ? @"ok" : @"MISSING");
+    for (NSString *g in groups) {
         if (![g isKindOfClass:[NSString class]] || g.length == 0) continue;
         NSString *greal = storedRealUUID(g, lid);
         if (!greal) {
@@ -255,13 +272,15 @@ static void switchGroupContainers(NSString *bid, NSString *lid, MCMContainerMana
             MCMContainer *made = groupContainerForUUID(g, u, YES);
             greal = made.uuid.UUIDString ?: u;
             storeRealUUID(g, lid, greal);
+            dlog(@"[groups]   minted %@ = %@ (made=%@)", g, greal, made ? @"ok" : @"nil");
         }
         MCMContainer *cur = currentGroupContainer(g, YES);
         MCMContainer *target = groupContainerForUUID(g, greal, NO);
-        if (!cur || !target) continue;
-        if ([cur.uuid.UUIDString isEqualToString:greal]) continue; // already active
+        if (!cur || !target) { dlog(@"[groups]   %@ cur=%@ target=%@ SKIP", g, cur?cur.uuid.UUIDString:@"nil", target?@"ok":@"nil"); continue; }
+        if ([cur.uuid.UUIDString isEqualToString:greal]) { dlog(@"[groups]   %@ already active %@", g, greal); continue; }
         NSError *err = nil;
-        [mgr replaceContainer:cur withContainer:target error:&err];
+        BOOL ok = [mgr replaceContainer:cur withContainer:target error:&err];
+        dlog(@"[groups]   %@ replace %@ -> %@ ok=%d err=%@", g, cur.uuid.UUIDString, greal, ok, err.localizedDescription);
     }
 }
 
@@ -294,6 +313,9 @@ static BOOL opSwitch(NSString *bid, NSString *lid) {
     if (![cur.uuid.UUIDString isEqualToString:real]) {
         NSError *err = nil;
         dataOK = [mgr replaceContainer:cur withContainer:target error:&err];
+        dlog(@"[data] %@ replace %@ -> %@ ok=%d err=%@", bid, cur.uuid.UUIDString, real, dataOK, err.localizedDescription);
+    } else {
+        dlog(@"[data] %@ already active %@", bid, real);
     }
 
     // Isolate the App Group containers too (best-effort; never fail the switch over these).
