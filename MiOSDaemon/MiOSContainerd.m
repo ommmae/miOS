@@ -14,6 +14,9 @@
 #import <notify.h>
 #import <spawn.h>
 #import <unistd.h>
+#import <mach-o/loader.h>
+#import <mach-o/fat.h>
+#import <libkern/OSByteOrder.h>
 
 extern char **environ;
 
@@ -28,6 +31,7 @@ extern char **environ;
 - (id)destroyContainerWithCompletion:(id)completion;
 @end
 @interface MCMAppDataContainer : MCMContainer @end
+@interface MCMSharedDataContainer : MCMContainer @end   // App Group ("group.*") containers
 @interface MCMContainerManager : NSObject
 + (instancetype)defaultManager;
 - (BOOL)replaceContainer:(id)a withContainer:(id)b error:(NSError **)error;
@@ -35,6 +39,7 @@ extern char **environ;
 
 static NSString *const kBase = @"/var/mobile/Library/Preferences/MiOS";
 static NSString *const kAppDataRoot = @"/var/mobile/Containers/Data/Application";
+static NSString *const kSharedRoot  = @"/var/mobile/Containers/Shared/AppGroup";
 static NSString *const kRequestNote = @"com.mios.containerd.request";
 
 static Class MCMAppDataClass(void) {
@@ -45,6 +50,127 @@ static Class MCMAppDataClass(void) {
         c = objc_getClass("MCMAppDataContainer");
     });
     return c;
+}
+
+static Class MCMSharedDataClass(void) {
+    static Class c; static dispatch_once_t t;
+    dispatch_once(&t, ^{
+        if (!objc_getClass("MCMSharedDataContainer"))
+            dlopen("/System/Library/PrivateFrameworks/MobileContainerManager.framework/MobileContainerManager", RTLD_LAZY);
+        c = objc_getClass("MCMSharedDataContainer");
+    });
+    return c;
+}
+
+// --- Enumerate the App Groups an installed app belongs to (from its code-signature entitlements) ---
+
+static NSString *appBundlePathForBundleID(NSString *bid) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *root = @"/var/containers/Bundle/Application";
+    for (NSString *sub in [fm contentsOfDirectoryAtPath:root error:nil] ?: @[]) {
+        NSString *dir = [root stringByAppendingPathComponent:sub];
+        for (NSString *item in [fm contentsOfDirectoryAtPath:dir error:nil] ?: @[]) {
+            if (![item hasSuffix:@".app"]) continue;
+            NSString *appPath = [dir stringByAppendingPathComponent:item];
+            NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:
+                                  [appPath stringByAppendingPathComponent:@"Info.plist"]];
+            if ([info[@"CFBundleIdentifier"] isEqualToString:bid]) return appPath;
+        }
+    }
+    return nil;
+}
+
+// Read the entitlements plist out of a Mach-O's embedded code signature, then return the app groups.
+// Only small regions are read, so this is cheap even for very large binaries (e.g. Instagram).
+#define CSMAGIC_EMBEDDED_SIGNATURE    0xfade0cc0
+#define CSMAGIC_EMBEDDED_ENTITLEMENTS 0xfade7171
+
+static NSData *readAt(NSFileHandle *fh, unsigned long long off, unsigned long long len) {
+    @try { [fh seekToFileOffset:off]; return [fh readDataOfLength:(NSUInteger)len]; }
+    @catch (__unused id e) { return nil; }
+}
+
+static NSDictionary *entitlementsForExecutable(NSString *exePath) {
+    NSFileHandle *fh = [NSFileHandle fileHandleForReadingAtPath:exePath];
+    if (!fh) return nil;
+    NSDictionary *result = nil;
+    @try {
+        unsigned long long sliceOff = 0;
+        NSData *magicData = readAt(fh, 0, 4);
+        if (magicData.length < 4) return nil;
+        uint32_t magic = *(const uint32_t *)magicData.bytes;
+
+        if (magic == FAT_MAGIC || magic == FAT_CIGAM) {
+            NSData *fh0 = readAt(fh, 0, sizeof(struct fat_header));
+            const struct fat_header *fh_ = (const struct fat_header *)fh0.bytes;
+            uint32_t nfat = OSSwapBigToHostInt32(fh_->nfat_arch);
+            NSData *archs = readAt(fh, sizeof(struct fat_header), nfat * sizeof(struct fat_arch));
+            const struct fat_arch *a = (const struct fat_arch *)archs.bytes;
+            for (uint32_t i = 0; i < nfat; i++) {
+                cpu_type_t ct = OSSwapBigToHostInt32(a[i].cputype);
+                if (ct == CPU_TYPE_ARM64) { sliceOff = OSSwapBigToHostInt32(a[i].offset); break; }
+            }
+            if (sliceOff == 0) sliceOff = OSSwapBigToHostInt32(a[0].offset);
+            NSData *m2 = readAt(fh, sliceOff, 4);
+            if (m2.length < 4) return nil;
+            magic = *(const uint32_t *)m2.bytes;
+        }
+        if (magic != MH_MAGIC_64 && magic != MH_CIGAM_64) return nil;
+
+        NSData *hdrData = readAt(fh, sliceOff, sizeof(struct mach_header_64));
+        const struct mach_header_64 *hdr = (const struct mach_header_64 *)hdrData.bytes;
+        uint32_t ncmds = hdr->ncmds, sizeofcmds = hdr->sizeofcmds;
+        NSData *cmds = readAt(fh, sliceOff + sizeof(struct mach_header_64), sizeofcmds);
+        const uint8_t *p = cmds.bytes;
+        const uint8_t *end = p + cmds.length;
+        uint32_t csOff = 0, csSize = 0;
+        for (uint32_t i = 0; i < ncmds && p + sizeof(struct load_command) <= end; i++) {
+            const struct load_command *lc = (const struct load_command *)p;
+            if (lc->cmd == LC_CODE_SIGNATURE) {
+                const struct linkedit_data_command *ld = (const struct linkedit_data_command *)p;
+                csOff = ld->dataoff; csSize = ld->datasize; break;
+            }
+            if (lc->cmdsize == 0) break;
+            p += lc->cmdsize;
+        }
+        if (!csOff || !csSize) return nil;
+
+        NSData *sig = readAt(fh, sliceOff + csOff, csSize);
+        const uint8_t *s = sig.bytes;
+        if (sig.length < 12) return nil;
+        uint32_t sbMagic = OSSwapBigToHostInt32(*(const uint32_t *)s);
+        if (sbMagic != CSMAGIC_EMBEDDED_SIGNATURE) return nil;
+        uint32_t count = OSSwapBigToHostInt32(*(const uint32_t *)(s + 8));
+        for (uint32_t i = 0; i < count; i++) {
+            const uint8_t *idx = s + 12 + i * 8;
+            if (idx + 8 > s + sig.length) break;
+            uint32_t blobOff = OSSwapBigToHostInt32(*(const uint32_t *)(idx + 4));
+            if (blobOff + 8 > sig.length) continue;
+            uint32_t bMagic = OSSwapBigToHostInt32(*(const uint32_t *)(s + blobOff));
+            if (bMagic == CSMAGIC_EMBEDDED_ENTITLEMENTS) {
+                uint32_t bLen = OSSwapBigToHostInt32(*(const uint32_t *)(s + blobOff + 4));
+                if (bLen <= 8 || blobOff + bLen > sig.length) break;
+                NSData *plist = [NSData dataWithBytes:(s + blobOff + 8) length:(bLen - 8)];
+                id obj = [NSPropertyListSerialization propertyListWithData:plist options:0 format:NULL error:NULL];
+                if ([obj isKindOfClass:[NSDictionary class]]) result = obj;
+                break;
+            }
+        }
+    } @catch (__unused id e) {}
+    [fh closeFile];
+    return result;
+}
+
+static NSArray<NSString *> *appGroupsForBundleID(NSString *bid) {
+    NSString *appPath = appBundlePathForBundleID(bid);
+    if (!appPath) return @[];
+    NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:
+                          [appPath stringByAppendingPathComponent:@"Info.plist"]];
+    NSString *exe = info[@"CFBundleExecutable"] ?: [appPath.lastPathComponent stringByDeletingPathExtension];
+    NSString *exePath = [appPath stringByAppendingPathComponent:exe];
+    NSDictionary *ents = entitlementsForExecutable(exePath);
+    id g = ents[@"com.apple.security.application-groups"];
+    return [g isKindOfClass:[NSArray class]] ? g : @[];
 }
 
 static NSString *reqPath(void)  { return [kBase stringByAppendingPathComponent:@"daemon_request.plist"]; }
@@ -93,6 +219,52 @@ static MCMContainer *containerForUUID(NSString *bid, NSString *uuidStr, BOOL cre
     return c;
 }
 
+// --- App Group shared-container helpers (mirror the data-container ones) ---
+
+// Group containers are keyed in the prefs under the group id itself (e.g. "group.com.burbn.instagram"),
+// which never collides with an app bundle id, so we reuse storeRealUUID/storedRealUUID.
+static MCMContainer *currentGroupContainer(NSString *groupID, BOOL create) {
+    Class cls = MCMSharedDataClass();
+    if (!cls) return nil;
+    BOOL existed = NO; NSError *err = nil;
+    MCMContainer *(*send)(id, SEL, id, BOOL, BOOL *, NSError **) = (void *)objc_msgSend;
+    return send(cls, @selector(containerWithIdentifier:createIfNecessary:existed:error:), groupID, create, &existed, &err);
+}
+
+static MCMContainer *groupContainerForUUID(NSString *groupID, NSString *uuidStr, BOOL createStructure) {
+    Class cls = MCMSharedDataClass();
+    if (!cls) return nil;
+    NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:uuidStr];
+    NSString *path = [kSharedRoot stringByAppendingPathComponent:uuidStr];
+    NSError *err = nil;
+    MCMContainer *c = [[cls alloc] initWithIdentifier:groupID path:path uniquePathComponent:uuidStr
+                                                 uuid:uuid personaUniqueString:nil error:&err];
+    if (c && createStructure) [c recreateDefaultStructureWithError:&err];
+    return c;
+}
+
+// Give every App Group the app belongs to its own per-logical-container shared container, so cached
+// state that lives in the group container (e.g. Instagram's device header in FBFamilySharedUserDefaults)
+// is isolated per container and a fresh container really starts empty.
+static void switchGroupContainers(NSString *bid, NSString *lid, MCMContainerManager *mgr) {
+    for (NSString *g in appGroupsForBundleID(bid)) {
+        if (![g isKindOfClass:[NSString class]] || g.length == 0) continue;
+        NSString *greal = storedRealUUID(g, lid);
+        if (!greal) {
+            NSString *u = [NSUUID UUID].UUIDString;
+            MCMContainer *made = groupContainerForUUID(g, u, YES);
+            greal = made.uuid.UUIDString ?: u;
+            storeRealUUID(g, lid, greal);
+        }
+        MCMContainer *cur = currentGroupContainer(g, YES);
+        MCMContainer *target = groupContainerForUUID(g, greal, NO);
+        if (!cur || !target) continue;
+        if ([cur.uuid.UUIDString isEqualToString:greal]) continue; // already active
+        NSError *err = nil;
+        [mgr replaceContainer:cur withContainer:target error:&err];
+    }
+}
+
 #pragma mark - Operations
 
 // Mint a brand-new empty real container; returns its UUID.
@@ -105,20 +277,29 @@ static NSString *opCreate(NSString *bid, NSString *lid) {
     return real;
 }
 
-// Make a saved container the app's active (assigned) container by replacing the current one.
+// Make a saved container the app's active (assigned) container by replacing the current one, and do
+// the same for all of the app's App Group shared containers (full isolation, empty cache per container).
 static BOOL opSwitch(NSString *bid, NSString *lid) {
     NSString *real = storedRealUUID(bid, lid);
     if (!real) real = opCreate(bid, lid);
     if (!real) return NO;
 
+    MCMContainerManager *mgr = ((id (*)(id, SEL))objc_msgSend)(objc_getClass("MCMContainerManager"), @selector(defaultManager));
+
     MCMContainer *cur = currentContainer(bid, YES);
     MCMContainer *target = containerForUUID(bid, real, NO);
     if (!cur || !target) return NO;
-    if ([cur.uuid.UUIDString isEqualToString:real]) return YES; // already active
 
-    NSError *err = nil;
-    MCMContainerManager *mgr = ((id (*)(id, SEL))objc_msgSend)(objc_getClass("MCMContainerManager"), @selector(defaultManager));
-    return [mgr replaceContainer:cur withContainer:target error:&err];
+    BOOL dataOK = YES;
+    if (![cur.uuid.UUIDString isEqualToString:real]) {
+        NSError *err = nil;
+        dataOK = [mgr replaceContainer:cur withContainer:target error:&err];
+    }
+
+    // Isolate the App Group containers too (best-effort; never fail the switch over these).
+    switchGroupContainers(bid, lid, mgr);
+
+    return dataOK;
 }
 
 // Write a bootstrap file INSIDE the app's real container. The sandboxed app can always read its
@@ -145,6 +326,16 @@ static void writeBootstrap(NSString *bid, NSString *lid) {
 }
 
 static BOOL opDelete(NSString *bid, NSString *lid) {
+    // Destroy this logical container's App Group shared containers first.
+    for (NSString *g in appGroupsForBundleID(bid)) {
+        if (![g isKindOfClass:[NSString class]] || g.length == 0) continue;
+        NSString *greal = storedRealUUID(g, lid);
+        if (!greal) continue;
+        MCMContainer *gc = groupContainerForUUID(g, greal, NO);
+        if (gc) [gc destroyContainerWithCompletion:nil];
+        [[NSFileManager defaultManager] removeItemAtPath:[kSharedRoot stringByAppendingPathComponent:greal] error:nil];
+    }
+
     NSString *real = storedRealUUID(bid, lid);
     if (!real) return YES;
     MCMContainer *c = containerForUUID(bid, real, NO);
