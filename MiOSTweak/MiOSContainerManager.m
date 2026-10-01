@@ -1,8 +1,8 @@
 #import "MiOSContainerManager.h"
+#import <stdlib.h>
 
 static NSString *const kMiOSBasePath = @"/var/mobile/Library/Preferences/MiOS";
 static NSString *const kMiOSContainerPrefsFile = @"com.mios.containerprefs.plist";
-static NSString *const kMiOSSpoofPrefsFile = @".mios_spoof_prefs.plist";
 
 @implementation MiOSContainerManager
 
@@ -23,17 +23,19 @@ static NSString *const kMiOSSpoofPrefsFile = @".mios_spoof_prefs.plist";
     return uuid;
 }
 
-- (NSString *)containerDirForBundleID:(NSString *)bundleID uuid:(NSString *)uuid {
-    return [[[kMiOSBasePath stringByAppendingPathComponent:@"Containers"]
-             stringByAppendingPathComponent:bundleID]
-            stringByAppendingPathComponent:uuid];
+// The app's REAL data container (HOME before any redirect). Keeping container data here
+// guarantees the sandbox allows reads AND writes, with no dependency on libSandy.
+- (NSString *)realHomePath {
+    const char *home = getenv("HOME");
+    return home ? [NSString stringWithUTF8String:home] : NSHomeDirectory();
 }
 
 - (NSString *)homePathForBundleID:(NSString *)bundleID ensureCreated:(BOOL)create {
     NSString *uuid = [self activeContainerUUIDForBundleID:bundleID];
     if (!uuid) return nil;
 
-    NSString *dir = [self containerDirForBundleID:bundleID uuid:uuid];
+    NSString *dir = [[[self realHomePath] stringByAppendingPathComponent:@"___MiOS_Containers"]
+                     stringByAppendingPathComponent:uuid];
     if (create) {
         NSFileManager *fm = [NSFileManager defaultManager];
         NSArray *subdirs = @[@"Documents", @"Library", @"Library/Preferences", @"Library/Caches",
@@ -47,11 +49,13 @@ static NSString *const kMiOSSpoofPrefsFile = @".mios_spoof_prefs.plist";
     return dir;
 }
 
+// Spoof prefs live centrally (the companion can write them there; the app only reads them).
 - (NSDictionary *)spoofPrefsForBundleID:(NSString *)bundleID {
     NSString *uuid = [self activeContainerUUIDForBundleID:bundleID];
     if (!uuid) return @{};
-    NSString *path = [[self containerDirForBundleID:bundleID uuid:uuid]
-                      stringByAppendingPathComponent:kMiOSSpoofPrefsFile];
+    NSString *path = [[[kMiOSBasePath stringByAppendingPathComponent:@"spoof"]
+                       stringByAppendingPathComponent:uuid]
+                      stringByAppendingPathExtension:@"plist"];
     return [NSDictionary dictionaryWithContentsOfFile:path] ?: @{};
 }
 

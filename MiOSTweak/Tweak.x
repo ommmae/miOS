@@ -32,8 +32,8 @@ static NSDictionary *gSpoof = nil;             // per-container spoof prefs
 static NSString *gSpoofSerial = nil;           // derived, stable per container
 static NSString *gSpoofUDID = nil;
 static NSString *gKcPrefix = nil;              // per-container keychain namespace prefix
-static BOOL gKeychainIsolation = YES;          // kill-switches (core plist), default on
-static BOOL gPrefsIsolation = YES;
+static BOOL gKeychainIsolation = NO;           // opt-in (core plist); validate the core redirect first
+static BOOL gPrefsIsolation = NO;
 
 static BOOL isMiOSEnabled(void) {
     NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:
@@ -467,14 +467,22 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
 
         NSDictionary *corePrefs = [NSDictionary dictionaryWithContentsOfFile:
             @"/var/mobile/Library/Preferences/MiOS/com.mios.core.plist"];
-        // Kill-switches so a problematic app can be recovered without rebuilding (default on).
-        gKeychainIsolation = corePrefs[@"keychainIsolation"] ? [corePrefs[@"keychainIsolation"] boolValue] : YES;
-        gPrefsIsolation = corePrefs[@"prefsIsolation"] ? [corePrefs[@"prefsIsolation"] boolValue] : YES;
+        // Opt-in isolation layers (core plist). Default off so the core redirect is validated first.
+        gKeychainIsolation = [corePrefs[@"keychainIsolation"] boolValue];
+        gPrefsIsolation = [corePrefs[@"prefsIsolation"] boolValue];
 
         // 1. Redirect the whole home directory into the container (the Crane/LiveContainer core).
+        //    Data lives inside the app's OWN data container, so the sandbox always allows it.
         if (containerEnabled && uuid) {
             NSString *home = [mgr homePathForBundleID:gBundleID ensureCreated:YES];
+            // Probe that we can actually write there before committing; otherwise leave the app alone.
+            BOOL writable = NO;
             if (home.length > 0) {
+                NSString *probe = [home stringByAppendingPathComponent:@".mios_write_probe"];
+                writable = [@"ok" writeToFile:probe atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                if (writable) [[NSFileManager defaultManager] removeItemAtPath:probe error:nil];
+            }
+            if (writable) {
                 gContainerHome = home;
                 gContainerTmp = [home stringByAppendingPathComponent:@"tmp"];
                 setenv("CFFIXED_USER_HOME", home.UTF8String, 1);
@@ -483,7 +491,7 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
                 MSHookFunction((void *)NSHomeDirectory, (void *)hook_NSHomeDirectory, (void **)&orig_NSHomeDirectory);
                 MSHookFunction((void *)NSTemporaryDirectory, (void *)hook_NSTemporaryDirectory, (void **)&orig_NSTemporaryDirectory);
 
-                // Per-container preferences and keychain (so each container is its own account).
+                // Per-container preferences and keychain (opt-in; so each container is its own account).
                 if (gPrefsIsolation) miosInitPrefsRedirect();
                 if (gKeychainIsolation) {
                     gKcPrefix = [NSString stringWithFormat:@"__mios_%@_", uuid];
@@ -492,12 +500,11 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
             }
         }
 
-        // 2. Per-container spoof: device model, identifiers, GPS.
+        // 2. Per-container spoof: device model, identifiers, GPS. Only for container apps.
+        if (!uuid) return;
         gSpoof = [mgr spoofPrefsForBundleID:gBundleID];
-        if (uuid) {
-            gSpoofSerial = derivedHex(uuid, @"serial", 11);
-            gSpoofUDID = derivedHex(uuid, @"udid", 25);
-        }
+        gSpoofSerial = derivedHex(uuid, @"serial", 11);
+        gSpoofUDID = derivedHex(uuid, @"udid", 25);
 
         if (locationSpoofEnabled()) {
             %init(LocationHooks);
