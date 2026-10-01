@@ -386,6 +386,7 @@ static void handleRequest(void) {
         NSArray *apps = [req[@"apps"] isKindOfClass:[NSArray class]] ? req[@"apps"] : @[];
         BOOL relaunch = [req[@"relaunch"] boolValue];
 
+        dlog(@"[req] op=%@ lid=%@ apps=%@", op, lid, apps);
         BOOL ok = (apps.count > 0);
         for (NSString *bid in apps) {
             if (![bid isKindOfClass:[NSString class]]) continue;
@@ -411,6 +412,7 @@ static void handleRequest(void) {
 
 int main(int argc, char **argv) {
     @autoreleasepool {
+        dlog(@"[start] miosd up (build with App Group isolation + logging)");
         int token = 0;
         notify_register_dispatch(kRequestNote.UTF8String, &token, dispatch_get_main_queue(), ^(int t) {
             handleRequest();
