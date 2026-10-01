@@ -102,7 +102,7 @@ static CLLocation *spoofedLocationObject(void) {
                                            course:(crs ?: -1) speed:(spd ?: -1) timestamp:[NSDate date]];
 }
 
-%group LocationHooks
+// (groups removed — flat hooks + single %init)
 %hook CLLocationManager
 - (CLLocation *)location {
     if (locationSpoofEnabled()) return spoofedLocationObject();
@@ -134,11 +134,11 @@ static CLLocation *spoofedLocationObject(void) {
 %hook CLLocation
 - (CLLocationCoordinate2D)coordinate { return locationSpoofEnabled() ? spoofedCoordinate() : %orig; }
 %end
-%end // LocationHooks
+// end LocationHooks
 
 // MARK: - Device fingerprint (UIDevice / NSProcessInfo)
 
-%group DeviceSpoofHooks
+// group DeviceSpoofHooks
 %hook UIDevice
 - (NSString *)systemVersion {
     if (spoofBool(@"enableSpoofSoftwareVersion")) {
@@ -194,11 +194,11 @@ static CLLocation *spoofedLocationObject(void) {
     return %orig;
 }
 %end
-%end // DeviceSpoofHooks
+// end DeviceSpoofHooks
 
 // MARK: - Battery / Brightness / Orientation / Proximity
 
-%group PhysicalHooks
+// group PhysicalHooks
 %hook UIDevice
 - (float)batteryLevel {
     if (spoofBool(@"enableSpoofBatteryLevel")) {
@@ -233,11 +233,11 @@ static CLLocation *spoofedLocationObject(void) {
     return %orig;
 }
 %end
-%end // PhysicalHooks
+// end PhysicalHooks
 
 // MARK: - Locale / TimeZone
 
-%group LocaleHooks
+// group LocaleHooks
 %hook NSTimeZone
 + (NSTimeZone *)localTimeZone {
     if (spoofBool(@"enableSpoofTimeZone")) {
@@ -275,11 +275,11 @@ static CLLocation *spoofedLocationObject(void) {
     return %orig;
 }
 %end
-%end // LocaleHooks
+// end LocaleHooks
 
 // MARK: - Carrier / Cellular type
 
-%group CarrierHooks
+// group CarrierHooks
 %hook CTCarrier
 - (NSString *)carrierName       { return spoofBool(@"enableSpoofCarrier") ? spoofStr(@"carrierName")        : %orig; }
 - (NSString *)mobileCountryCode { return spoofBool(@"enableSpoofCarrier") ? spoofStr(@"carrierMCC")         : %orig; }
@@ -305,11 +305,11 @@ static CLLocation *spoofedLocationObject(void) {
     return %orig;
 }
 %end
-%end // CarrierHooks
+// end CarrierHooks
 
 // MARK: - Identifiers (IDFV / IDFA / DeviceCheck / iCloud)
 
-%group IdentifierSpoofHooks
+// group IdentifierSpoofHooks
 %hook UIDevice
 - (NSUUID *)identifierForVendor {
     if (spoofBool(@"enableSpoofVendorID")) {
@@ -344,11 +344,11 @@ static CLLocation *spoofedLocationObject(void) {
 %hook NSFileManager
 - (id)ubiquityIdentityToken { return spoofBool(@"enableSpoofCloudToken") ? nil : %orig; }
 %end
-%end // IdentifierSpoofHooks
+// end IdentifierSpoofHooks
 
 // MARK: - Mail / Message availability
 
-%group MailMessageHooks
+// group MailMessageHooks
 %hook MFMailComposeViewController
 + (BOOL)canSendMail {
     if (spoofBool(@"enableSpoofMail")) return spoofBool(@"mailAvailable");
@@ -361,11 +361,11 @@ static CLLocation *spoofedLocationObject(void) {
     return %orig;
 }
 %end
-%end // MailMessageHooks
+// end MailMessageHooks
 
 // MARK: - Screenshot-detection suppression
 
-%group ScreenshotHooks
+// group ScreenshotHooks
 %hook NSNotificationCenter
 - (void)postNotificationName:(NSNotificationName)name object:(id)object userInfo:(NSDictionary *)userInfo {
     if (spoofBool(@"enableSpoofScreenshot") &&
@@ -380,11 +380,11 @@ static CLLocation *spoofedLocationObject(void) {
     %orig;
 }
 %end
-%end // ScreenshotHooks
+// end ScreenshotHooks
 
 // MARK: - Gyroscope randomization
 
-%group GyroscopeHooks
+// group GyroscopeHooks
 %hook CMMotionManager
 - (id)gyroData {
     id orig = %orig;
@@ -402,7 +402,7 @@ static CLLocation *spoofedLocationObject(void) {
     return orig;
 }
 %end
-%end // GyroscopeHooks
+// end GyroscopeHooks
 
 // MARK: - Anti-detection (hide common jailbreak probes)
 
@@ -444,7 +444,7 @@ static FILE *hook_fopen(const char *p, const char *m) {
     return orig_fopen(p, m);
 }
 
-%group DetectionHooks
+// group DetectionHooks
 %hook UIApplication
 - (BOOL)canOpenURL:(NSURL *)url {
     if (spoofBool(@"enableDisableDetection")) {
@@ -454,7 +454,7 @@ static FILE *hook_fopen(const char *p, const char *m) {
     return %orig;
 }
 %end
-%end // DetectionHooks
+// end DetectionHooks
 
 // MARK: - Keychain namespacing (per-container isolation inside the app's own access group)
 
@@ -695,7 +695,7 @@ static void *new_dlsym(void *handle, const char *symbol) {
 
 // MARK: - Per-container HTTPS proxy (NSURLSessionConfiguration)
 
-%group ProxyHooks
+// group ProxyHooks
 %hook NSURLSessionConfiguration
 + (NSURLSessionConfiguration *)defaultSessionConfiguration {
     NSURLSessionConfiguration *c = %orig;
@@ -724,7 +724,7 @@ static void *new_dlsym(void *handle, const char *symbol) {
     return c;
 }
 %end
-%end // ProxyHooks
+// end ProxyHooks
 
 // MARK: - Build the allocation-free cache
 
@@ -895,17 +895,9 @@ static void miosResetContainerCachesOnce(NSString *uuid) {
         // 4. Precompute cache + install hooks.
         miosBuildSpoofCache();
 
-        if (locationSpoofEnabled() || active.enableLocationMode) %init(LocationHooks);
-        %init(IdentifierSpoofHooks);
-        %init(DeviceSpoofHooks);
-        %init(PhysicalHooks);
-        %init(LocaleHooks);
-        %init(CarrierHooks);
-        %init(MailMessageHooks);
-        %init(ScreenshotHooks);
-        %init(GyroscopeHooks);
-        %init(DetectionHooks);
-        if (active.enableProxy || spoofStr(@"proxyHost").length) %init(ProxyHooks);
+        // Every %hook is now flat (groups were removed); one %init binds them all.
+        // Each hook body still gates itself with the per-container spoofBool(...) check.
+        %init;
 
         // Low-level C hooks (always installed when device spoofing is active).
         if (gDeviceSpoofActive) {
