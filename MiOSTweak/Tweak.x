@@ -721,6 +721,26 @@ static void miosBuildSpoofCache(void) {
             selfTestAfter = @(b1);
         }
 
+        // Extra probes: what does uname() report, and what does MGCopyAnswer("ProductType") report?
+        // (MGCopyAnswer is only READ here, never hooked.) This tells us which API the app trusts.
+        NSString *unameMachine = @"";
+        NSString *mgProductType = @"";
+        if (deviceSpoofEnabled()) {
+            struct utsname un; memset(&un, 0, sizeof(un));
+            if (uname(&un) == 0) unameMachine = @(un.machine);
+            void *mgH = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
+            if (mgH) {
+                CFTypeRef (*mg)(CFStringRef) = (CFTypeRef(*)(CFStringRef))dlsym(mgH, "MGCopyAnswer");
+                if (mg) {
+                    CFTypeRef v = mg(CFSTR("ProductType"));
+                    if (v) {
+                        if (CFGetTypeID(v) == CFStringGetTypeID()) mgProductType = [(__bridge NSString *)v copy];
+                        CFRelease(v);
+                    }
+                }
+            }
+        }
+
         // 3. Carrier spoofing (part of the device fingerprint, or standalone).
         if (carrierSpoofActive()) {
             %init(CarrierHooks);
@@ -756,6 +776,8 @@ static void miosBuildSpoofCache(void) {
             dbg[@"gcMachine"] = gcMachine ? @(gcMachine) : @"(null)";
             dbg[@"selfTest_before_hook"] = selfTestBefore;
             dbg[@"selfTest_after_hook"] = selfTestAfter;   // should equal deviceIdentifier if hook works
+            dbg[@"probe_uname_machine"] = unameMachine;    // should be spoofed if uname hook works
+            dbg[@"probe_MGCopyAnswer_ProductType"] = mgProductType; // real (we don't hook MG) — is this what IG uses?
             dbg[@"spoofKeys"] = [gSpoof allKeys] ?: @[];
             dbg[@"ts"] = [NSDate date].description;
             [dbg writeToFile:[NSHomeDirectory() stringByAppendingPathComponent:@"Documents/mios_debug.plist"] atomically:YES];
