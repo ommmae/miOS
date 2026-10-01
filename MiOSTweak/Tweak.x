@@ -474,10 +474,13 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
         // Opt-in isolation layers (core plist). Default off so the core redirect is validated first.
         gKeychainIsolation = [corePrefs[@"keychainIsolation"] boolValue];
         gPrefsIsolation = [corePrefs[@"prefsIsolation"] boolValue];
+        // File-level containerization (HOME redirect) is still experimental and currently crashes
+        // some apps, so it is opt-in. Default OFF means apps launch normally (spoof-only).
+        BOOL fileIsolation = [corePrefs[@"fileIsolation"] boolValue];
 
         // 1. Redirect the whole home directory into the container (the Crane/LiveContainer core).
         //    Data lives inside the app's OWN data container, so the sandbox always allows it.
-        if (containerEnabled && uuid) {
+        if (fileIsolation && containerEnabled && uuid) {
             NSString *home = [mgr homePathForBundleID:gBundleID ensureCreated:YES];
             // Probe that we can actually write there before committing; otherwise leave the app alone.
             BOOL writable = NO;
