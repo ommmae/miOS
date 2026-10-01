@@ -31,4 +31,4 @@ include $(THEOS_MAKE_PATH)/application.mk
 include $(THEOS_MAKE_PATH)/tool.mk
 
 after-install::
-	install.exec "launchctl unload /var/jb/Library/LaunchDaemons/com.mios.containerd.plist 2>/dev/null; launchctl load /var/jb/Library/LaunchDaemons/com.mios.containerd.plist 2>/dev/null; launchctl bootstrap system /var/jb/Library/LaunchDaemons/com.mios.containerd.plist 2>/dev/null; killall -9 miosd 2>/dev/null; killall -9 SpringBoard"
+	install.exec "/var/jb/usr/bin/launchctl bootstrap system /var/jb/Library/LaunchDaemons/com.mios.containerd.plist 2>/dev/null; /var/jb/usr/bin/launchctl kickstart -k system/com.mios.containerd 2>/dev/null; /var/jb/usr/bin/killall -9 miosd 2>/dev/null; /var/jb/usr/bin/killall -9 SpringBoard 2>/dev/null; killall -9 SpringBoard 2>/dev/null"
