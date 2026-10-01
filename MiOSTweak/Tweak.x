@@ -7,6 +7,9 @@
 #import <sys/sysctl.h>
 #import <sys/utsname.h>
 #import <errno.h>
+#import <mach-o/loader.h>
+#import <mach-o/fat.h>
+#import <libkern/OSByteOrder.h>
 #import "MiOSContainerManager.h"
 
 // MARK: - Private declarations
@@ -695,6 +698,118 @@ static void miosBuildSpoofCache(void) {
     }
 }
 
+// MARK: - Fresh-container reset: wipe cached App Group state (device-id/header) once per container
+//
+// Instagram (and other apps) cache a persistent device-id + device header (User-Agent) in their
+// App Group *shared* container, which lives outside the data container and survives container
+// recreation. On the FIRST launch of a container we clear that group state so the app re-registers
+// as the spoofed device instead of re-using the old cached one. Runs in-process (no daemon needed).
+
+#define MIOS_CS_EMBEDDED_SIGNATURE    0xfade0cc0
+#define MIOS_CS_EMBEDDED_ENTITLEMENTS 0xfade7171
+
+static NSData *miosReadAt(NSFileHandle *fh, unsigned long long off, unsigned long long len) {
+    @try { [fh seekToFileOffset:off]; return [fh readDataOfLength:(NSUInteger)len]; }
+    @catch (__unused id e) { return nil; }
+}
+
+static NSArray<NSString *> *miosSelfAppGroups(void) {
+    NSString *exe = [[NSBundle mainBundle] executablePath];
+    NSFileHandle *fh = exe ? [NSFileHandle fileHandleForReadingAtPath:exe] : nil;
+    if (!fh) return @[];
+    NSArray *result = @[];
+    @try {
+        unsigned long long sliceOff = 0;
+        NSData *m = miosReadAt(fh, 0, 4);
+        if (m.length < 4) { [fh closeFile]; return @[]; }
+        uint32_t magic = *(const uint32_t *)m.bytes;
+        if (magic == FAT_MAGIC || magic == FAT_CIGAM) {
+            NSData *fhd = miosReadAt(fh, 0, sizeof(struct fat_header));
+            uint32_t nfat = OSSwapBigToHostInt32(((const struct fat_header *)fhd.bytes)->nfat_arch);
+            NSData *archs = miosReadAt(fh, sizeof(struct fat_header), nfat * sizeof(struct fat_arch));
+            const struct fat_arch *a = (const struct fat_arch *)archs.bytes;
+            for (uint32_t i = 0; i < nfat; i++) {
+                if (OSSwapBigToHostInt32(a[i].cputype) == CPU_TYPE_ARM64) { sliceOff = OSSwapBigToHostInt32(a[i].offset); break; }
+            }
+            if (!sliceOff && nfat) sliceOff = OSSwapBigToHostInt32(a[0].offset);
+            NSData *m2 = miosReadAt(fh, sliceOff, 4);
+            magic = m2.length >= 4 ? *(const uint32_t *)m2.bytes : 0;
+        }
+        if (magic != MH_MAGIC_64 && magic != MH_CIGAM_64) { [fh closeFile]; return @[]; }
+        NSData *hd = miosReadAt(fh, sliceOff, sizeof(struct mach_header_64));
+        const struct mach_header_64 *hdr = (const struct mach_header_64 *)hd.bytes;
+        uint32_t ncmds = hdr->ncmds, sizeofcmds = hdr->sizeofcmds;
+        NSData *cmds = miosReadAt(fh, sliceOff + sizeof(struct mach_header_64), sizeofcmds);
+        const uint8_t *p = cmds.bytes, *end = p + cmds.length;
+        uint32_t csOff = 0, csSize = 0;
+        for (uint32_t i = 0; i < ncmds && p + sizeof(struct load_command) <= end; i++) {
+            const struct load_command *lc = (const struct load_command *)p;
+            if (lc->cmd == LC_CODE_SIGNATURE) {
+                const struct linkedit_data_command *ld = (const struct linkedit_data_command *)p;
+                csOff = ld->dataoff; csSize = ld->datasize; break;
+            }
+            if (lc->cmdsize == 0) break;
+            p += lc->cmdsize;
+        }
+        if (csOff && csSize) {
+            NSData *sig = miosReadAt(fh, sliceOff + csOff, csSize);
+            const uint8_t *s = sig.bytes;
+            if (sig.length >= 12 && OSSwapBigToHostInt32(*(const uint32_t *)s) == MIOS_CS_EMBEDDED_SIGNATURE) {
+                uint32_t count = OSSwapBigToHostInt32(*(const uint32_t *)(s + 8));
+                for (uint32_t i = 0; i < count; i++) {
+                    const uint8_t *idx = s + 12 + i * 8;
+                    if (idx + 8 > s + sig.length) break;
+                    uint32_t bo = OSSwapBigToHostInt32(*(const uint32_t *)(idx + 4));
+                    if (bo + 8 > sig.length) continue;
+                    if (OSSwapBigToHostInt32(*(const uint32_t *)(s + bo)) == MIOS_CS_EMBEDDED_ENTITLEMENTS) {
+                        uint32_t bl = OSSwapBigToHostInt32(*(const uint32_t *)(s + bo + 4));
+                        if (bl > 8 && bo + bl <= sig.length) {
+                            NSData *pl = [NSData dataWithBytes:(s + bo + 8) length:(bl - 8)];
+                            id obj = [NSPropertyListSerialization propertyListWithData:pl options:0 format:NULL error:NULL];
+                            id g = [obj isKindOfClass:[NSDictionary class]] ? obj[@"com.apple.security.application-groups"] : nil;
+                            if ([g isKindOfClass:[NSArray class]]) result = g;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    } @catch (__unused id e) {}
+    [fh closeFile];
+    return result;
+}
+
+static void miosResetContainerCachesOnce(NSString *uuid) {
+    if (uuid.length == 0) return;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *marker = [NSHomeDirectory() stringByAppendingPathComponent:
+                        [NSString stringWithFormat:@"Library/.mios_init_%@", uuid]];
+    if ([fm fileExistsAtPath:marker]) return;   // already initialised this container
+
+    for (NSString *group in miosSelfAppGroups()) {
+        if (![group isKindOfClass:[NSString class]] || group.length == 0) continue;
+        // Clear the group's NSUserDefaults (where the cached device-id / header live).
+        @try {
+            NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:group];
+            [d removePersistentDomainForName:group];
+            [d synchronize];
+        } @catch (__unused id e) {}
+        // Wipe cached files in the group container (Preferences / Caches) so nothing lingers.
+        NSURL *gurl = [fm containerURLForSecurityApplicationGroupIdentifier:group];
+        if (gurl) {
+            for (NSString *sub in @[@"Library/Preferences", @"Library/Caches", @"Library/Application Support"]) {
+                NSString *dir = [gurl.path stringByAppendingPathComponent:sub];
+                for (NSString *item in [fm contentsOfDirectoryAtPath:dir error:nil] ?: @[]) {
+                    [fm removeItemAtPath:[dir stringByAppendingPathComponent:item] error:nil];
+                }
+            }
+        }
+    }
+
+    [fm createDirectoryAtPath:[marker stringByDeletingLastPathComponent] withIntermediateDirectories:YES attributes:nil error:nil];
+    [@"1" writeToFile:marker atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+
 // MARK: - Constructor
 
 %ctor {
@@ -735,6 +850,10 @@ static void miosBuildSpoofCache(void) {
         miosInitKeychainNamespace();
 
         if (!gSpoof) gSpoof = @{};
+
+        // First launch of this container: wipe cached App Group state (device-id/header) so the app
+        // re-registers as the spoofed device instead of a value cached from a previous container.
+        miosResetContainerCachesOnce(uuid);
 
         // Precompute every C-hook value NOW (ObjC is safe here), so the low-level hooks never allocate.
         miosBuildSpoofCache();
