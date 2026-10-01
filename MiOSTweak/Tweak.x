@@ -617,6 +617,7 @@ static CFDictionaryRef hook_CNCopyCurrentNetworkInfo(CFStringRef interfaceName) 
 // tweaks (Shadow) that also hook it are unaffected — that is what caused the earlier EXC_GUARD /
 // EXC_BREAKPOINT crashes when MGCopyAnswer was hooked globally with MSHookFunction.
 static CFTypeRef (*real_MGCopyAnswer)(CFStringRef) = NULL;
+static void *(*real_dlsym)(void *, const char *) = NULL;
 
 static CFTypeRef fish_MGCopyAnswer(CFStringRef key) {
     if (gDeviceSpoofActive && key) {
@@ -630,25 +631,34 @@ static CFTypeRef fish_MGCopyAnswer(CFStringRef key) {
             return CFRetain(gcMGProductVersion);
     }
     if (real_MGCopyAnswer) return real_MGCopyAnswer(key);
-    return NULL;
+    // Fall back to the live function if rebinding never captured the original.
+    void *mgH = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
+    CFTypeRef (*fn)(CFStringRef) = mgH ? (CFTypeRef(*)(CFStringRef))dlsym(mgH, "MGCopyAnswer") : NULL;
+    return fn ? fn(key) : NULL;
 }
 
-// Rebind MGCopyAnswer only in the main executable and frameworks inside the app bundle. System
-// libraries (CoreTelephony, libMobileGestalt, the JB prefix) are left alone.
-static void miosRebindMGForAppImages(void) {
-    if (!gcMGProductType && !gcMGProductVersion && !gcMGDeviceName && !gcMGHWModel) return;
-    NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
-    if (bundlePath.length == 0) return;
-    const char *prefix = bundlePath.UTF8String;
-    struct rebinding r = { "MGCopyAnswer", (void *)fish_MGCopyAnswer, (void **)&real_MGCopyAnswer };
-    uint32_t count = _dyld_image_count();
-    for (uint32_t i = 0; i < count; i++) {
-        const char *name = _dyld_get_image_name(i);
-        if (!name) continue;
-        // Only images that live inside the app bundle (main binary + embedded frameworks).
-        if (strncmp(name, prefix, strlen(prefix)) != 0) continue;
-        rebind_symbols_image((void *)_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i), &r, 1);
+// Apps (FB/Instagram) often resolve MGCopyAnswer at runtime via dlsym instead of a linked symbol,
+// which a symbol rebind cannot catch. Intercept dlsym so such a lookup hands back our replacement.
+static void *fish_dlsym(void *handle, const char *symbol) {
+    if (symbol && gDeviceSpoofActive && strcmp(symbol, "MGCopyAnswer") == 0 &&
+        (gcMGProductType || gcMGProductVersion || gcMGDeviceName || gcMGHWModel)) {
+        return (void *)fish_MGCopyAnswer;
     }
+    if (real_dlsym) return real_dlsym(handle, symbol);
+    return dlsym(handle, symbol);
+}
+
+// Rebind MGCopyAnswer + dlsym across ALL images (and future ones). This is safe: fishhook rewrites
+// the CALLERS' symbol pointers, never the real function, so CoreTelephony's own MGCopyAnswer calls
+// and jailbreak-bypass tweaks (Shadow) that inline-hook it keep working. Our hook only overrides the
+// device-identity keys and passes everything else to the real function.
+static void miosRebindMG(void) {
+    if (!gcMGProductType && !gcMGProductVersion && !gcMGDeviceName && !gcMGHWModel) return;
+    struct rebinding rebindings[] = {
+        { "MGCopyAnswer", (void *)fish_MGCopyAnswer, (void **)&real_MGCopyAnswer },
+        { "dlsym",        (void *)fish_dlsym,        (void **)&real_dlsym },
+    };
+    rebind_symbols(rebindings, 2);
 }
 
 // MARK: - Derived unique-device identifiers (stable per container)
@@ -775,9 +785,10 @@ static void miosBuildSpoofCache(void) {
             sysctlbyname("hw.machine", b1, &s1, NULL, 0);
             selfTestAfter = @(b1);
 
-            // MGCopyAnswer: rebind it ONLY inside the app's own images (safe; no global hook).
-            // This is what actually spoofs model/iOS for apps like Instagram that read MobileGestalt.
-            miosRebindMGForAppImages();
+            // MGCopyAnswer: rebind the symbol (and dlsym) across images so apps like Instagram that
+            // read MobileGestalt — directly or via dlsym — see the spoofed model/iOS. Safe: no inline
+            // hook of the real function, so CoreTelephony/Shadow are unaffected.
+            miosRebindMG();
         }
 
         // Extra probes: what does uname() report, and what does MGCopyAnswer("ProductType") report?
