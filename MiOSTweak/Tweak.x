@@ -59,6 +59,14 @@ static char     *gcModel    = NULL;   // hw.model                    (hwModel)
 static uint64_t  gcMemsize  = 0;      // 0 = leave as-is
 static int       gcCPU      = 0;      // 0 = leave as-is
 static CFDictionaryRef gcWifiInfo     = NULL;   // pre-built SSID/BSSID dict; NULL = don't spoof
+// MobileGestalt values, handed out ONLY to callers that resolve MGCopyAnswer via dlsym (e.g. the
+// Facebook/Instagram apps). We never hook the real MGCopyAnswer, so CoreTelephony's init path and
+// jailbreak-bypass tweaks are untouched.
+static CFStringRef gcMGProductType    = NULL;   // ProductType / HWModelStr   (deviceIdentifier)
+static CFStringRef gcMGHWModel        = NULL;   // HardwarePlatform           (hwModel)
+static CFStringRef gcMGDeviceName     = NULL;   // DeviceName / marketing-name
+static CFStringRef gcMGProductVersion = NULL;   // ProductVersion             (iosVersion)
+static CFTypeRef (*gRealMGCopyAnswer)(CFStringRef) = NULL;  // captured before dlsym is hooked
 
 // Defined lower down; used by the derivation helpers below.
 static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length);
@@ -605,6 +613,35 @@ static CFDictionaryRef hook_CNCopyCurrentNetworkInfo(CFStringRef interfaceName) 
     return orig_CNCopyCurrentNetworkInfo ? orig_CNCopyCurrentNetworkInfo(interfaceName) : NULL;
 }
 
+// MARK: - MGCopyAnswer via dlsym (safe: we never patch the real function)
+
+// Our MGCopyAnswer: spoof the device-identity keys, pass everything else to the real function.
+static CFTypeRef mios_MGCopyAnswer(CFStringRef key) {
+    if (gDeviceSpoofActive && key) {
+        if (gcMGProductType && (CFEqual(key, CFSTR("ProductType")) || CFEqual(key, CFSTR("HWModelStr"))))
+            return CFRetain(gcMGProductType);
+        if (gcMGDeviceName && (CFEqual(key, CFSTR("DeviceName")) || CFEqual(key, CFSTR("marketing-name")) || CFEqual(key, CFSTR("UserAssignedDeviceName"))))
+            return CFRetain(gcMGDeviceName);
+        if (gcMGHWModel && CFEqual(key, CFSTR("HardwarePlatform")))
+            return CFRetain(gcMGHWModel);
+        if (gcMGProductVersion && CFEqual(key, CFSTR("ProductVersion")))
+            return CFRetain(gcMGProductVersion);
+    }
+    return gRealMGCopyAnswer ? gRealMGCopyAnswer(key) : NULL;
+}
+
+// Intercept dlsym so that an app resolving "MGCopyAnswer" at runtime gets OUR implementation,
+// without ever modifying the real libMobileGestalt function (that path crashes CoreTelephony).
+static void *(*orig_dlsym)(void *, const char *) = NULL;
+
+static void *new_dlsym(void *handle, const char *symbol) {
+    if (symbol && gDeviceSpoofActive && strcmp(symbol, "MGCopyAnswer") == 0 &&
+        (gcMGProductType || gcMGProductVersion || gcMGDeviceName || gcMGHWModel)) {
+        return (void *)mios_MGCopyAnswer;
+    }
+    return orig_dlsym ? orig_dlsym(handle, symbol) : NULL;
+}
+
 // MARK: - Derived unique-device identifiers (stable per container)
 
 static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
@@ -629,6 +666,11 @@ static char *dupCString(NSString *s) {
     return c ? strdup(c) : NULL;
 }
 
+static CFStringRef retainedCF(NSString *s) {
+    if (s.length == 0) return NULL;
+    return (__bridge_retained CFStringRef)[s copy];
+}
+
 static void miosBuildSpoofCache(void) {
     gDeviceSpoofActive = deviceSpoofEnabled();
     if (gDeviceSpoofActive) {
@@ -636,6 +678,10 @@ static void miosBuildSpoofCache(void) {
         gcModel   = dupCString(spoofStr(@"hwModel"));
         gcMemsize = spoofedMemsize();
         gcCPU     = (int)spoofedCPUCores();
+        gcMGProductType    = retainedCF(spoofStr(@"deviceIdentifier"));
+        gcMGHWModel        = retainedCF(spoofStr(@"hwModel"));
+        gcMGDeviceName     = retainedCF(spoofStr(@"deviceName"));
+        gcMGProductVersion = retainedCF(spoofStr(@"iosVersion"));
     }
     if (wifiSpoofActive()) {
         NSString *ssid  = derivedSSID();
@@ -720,11 +766,16 @@ static void miosBuildSpoofCache(void) {
             sysctlbyname("hw.machine", b1, &s1, NULL, 0);
             selfTestAfter = @(b1);
 
-            // NOTE: we intentionally do NOT touch MGCopyAnswer (neither inline hook, symbol rebind,
-            // nor dlsym interception). Every one of those crashes this app (CoreTelephony's init path
-            // and the Shadow jailbreak-bypass tweak both go through MGCopyAnswer). Ghost does the same
-            // — it never touches MGCopyAnswer — and still spoofs the iOS version via UIDevice /
-            // NSProcessInfo, which is what we rely on here.
+            // MGCopyAnswer: apps like Instagram read the model/iOS from MobileGestalt, resolving it
+            // via dlsym. We never patch the real MGCopyAnswer (that crashes CoreTelephony/Shadow).
+            // Instead we capture the real function, then hook dlsym so a lookup of "MGCopyAnswer"
+            // returns OUR implementation — only the app's own resolved pointer is affected.
+            if (gcMGProductType || gcMGProductVersion || gcMGDeviceName || gcMGHWModel) {
+                void *mgH = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
+                if (!mgH) mgH = dlopen("/var/jb/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
+                if (mgH) gRealMGCopyAnswer = (CFTypeRef(*)(CFStringRef))dlsym(mgH, "MGCopyAnswer");
+                MSHookFunction((void *)dlsym, (void *)new_dlsym, (void **)&orig_dlsym);
+            }
         }
 
         // Extra probes: what does uname() report, and what does MGCopyAnswer("ProductType") report?
