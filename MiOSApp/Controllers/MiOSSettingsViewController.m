@@ -6,9 +6,7 @@
 
 extern char **environ;
 
-static NSString *const kMiOSCorePlist = @"/var/mobile/Library/Preferences/MiOS/com.mios.core.plist";
-
-@interface MiOSSettingsViewController () <MiOSToggleCellDelegate>
+@interface MiOSSettingsViewController ()
 @property (nonatomic, strong) UIScrollView *scrollView;
 @property (nonatomic, strong) UIStackView *mainStack;
 @end
@@ -47,67 +45,32 @@ static NSString *const kMiOSCorePlist = @"/var/mobile/Library/Preferences/MiOS/c
     ]];
 
     [self buildAboutSection];
-    [self buildExperimentalSection];
+    [self buildIsolationInfoSection];
     [self buildDataSection];
     [self buildInfoSection];
 }
 
-#pragma mark - Experimental isolation toggles
+#pragma mark - Isolation (always on)
 
-- (BOOL)coreBoolForKey:(NSString *)key defaultValue:(BOOL)def {
-    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kMiOSCorePlist];
-    return prefs[key] ? [prefs[key] boolValue] : def;
-}
+- (void)buildIsolationInfoSection {
+    MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@"Isolation"];
 
-- (void)setCoreBool:(BOOL)value forKey:(NSString *)key {
-    NSMutableDictionary *prefs = [NSMutableDictionary dictionaryWithContentsOfFile:kMiOSCorePlist] ?: [NSMutableDictionary dictionary];
-    prefs[key] = @(value);
-    [[NSFileManager defaultManager] createDirectoryAtPath:[kMiOSCorePlist stringByDeletingLastPathComponent]
-                              withIntermediateDirectories:YES attributes:nil error:nil];
-    [prefs writeToFile:kMiOSCorePlist atomically:YES];
-}
-
-- (void)buildExperimentalSection {
-    MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@"Experimental"];
-
-    MiOSToggleCell *fileCell = [[MiOSToggleCell alloc]
+    MiOSNavigationCell *fileCell = [[MiOSNavigationCell alloc]
         initWithTitle:@"File Isolation"
-             subtitle:@"Real per-container storage (may break some apps)"
+             subtitle:@"Always on · real per-container storage"
                  icon:@"folder.fill.badge.gearshape"
-                color:[UIColor systemTealColor]
-                  key:@"fileIsolation"];
-    fileCell.isOn = [self coreBoolForKey:@"fileIsolation" defaultValue:NO];
-    fileCell.delegate = self;
+                color:[UIColor systemTealColor]];
     [section addCellView:fileCell];
     [section addSeparator];
 
-    MiOSToggleCell *kcCell = [[MiOSToggleCell alloc]
+    MiOSNavigationCell *kcCell = [[MiOSNavigationCell alloc]
         initWithTitle:@"Keychain Isolation"
-             subtitle:@"Separate keychain per container"
+             subtitle:@"Always on · separate keychain & sessions per container"
                  icon:@"key.fill"
-                color:[UIColor systemIndigoColor]
-                  key:@"keychainIsolation"];
-    kcCell.isOn = [self coreBoolForKey:@"keychainIsolation" defaultValue:YES];
-    kcCell.delegate = self;
+                color:[UIColor systemIndigoColor]];
     [section addCellView:kcCell];
-    [section addSeparator];
-
-    MiOSToggleCell *prefCell = [[MiOSToggleCell alloc]
-        initWithTitle:@"Preferences Isolation"
-             subtitle:@"Separate NSUserDefaults per container"
-                 icon:@"slider.horizontal.3"
-                color:[UIColor systemPurpleColor]
-                  key:@"prefsIsolation"];
-    prefCell.isOn = [self coreBoolForKey:@"prefsIsolation" defaultValue:NO];
-    prefCell.delegate = self;
-    [section addCellView:prefCell];
 
     [_mainStack addArrangedSubview:section];
-}
-
-- (void)toggleCell:(id)cell didChangeValue:(BOOL)value forKey:(NSString *)key {
-    [self setCoreBool:value forKey:key];
-    // Changes take effect the next time each container app is launched.
 }
 
 - (void)buildAboutSection {

@@ -121,6 +121,29 @@ static BOOL opSwitch(NSString *bid, NSString *lid) {
     return [mgr replaceContainer:cur withContainer:target error:&err];
 }
 
+// Write a bootstrap file INSIDE the app's real container. The sandboxed app can always read its
+// own HOME, so the tweak picks up its container UUID + spoof settings without needing libSandy or
+// access to the central MiOS prefs folder (which the sandbox may deny). This is what makes the
+// in-process spoofing actually fire inside container apps.
+static void writeBootstrap(NSString *bid, NSString *lid) {
+    MCMContainer *cur = currentContainer(bid, NO);
+    NSString *cpath = cur.url.path;
+    if (cpath.length == 0) return;
+
+    NSString *spoofPath = [[[kBase stringByAppendingPathComponent:@"spoof"]
+                            stringByAppendingPathComponent:lid] stringByAppendingPathExtension:@"plist"];
+    NSDictionary *spoof = [NSDictionary dictionaryWithContentsOfFile:spoofPath] ?: @{};
+    NSDictionary *boot = @{ @"uuid": lid, @"spoof": spoof, @"keychainIsolation": @YES };
+
+    NSString *prefDir = [cpath stringByAppendingPathComponent:@"Library/Preferences"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:prefDir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *out = [prefDir stringByAppendingPathComponent:@"com.mios.active.plist"];
+    [boot writeToFile:out atomically:YES];
+    // The daemon is root; make sure the app's user (mobile) owns these so the read always succeeds.
+    chown(prefDir.UTF8String, 501, 501);
+    chown(out.UTF8String, 501, 501);
+}
+
 static BOOL opDelete(NSString *bid, NSString *lid) {
     NSString *real = storedRealUUID(bid, lid);
     if (!real) return YES;
@@ -158,7 +181,10 @@ static void handleRequest(void) {
             } else if ([op isEqualToString:@"switch"]) {
                 BOOL s = opSwitch(bid, lid);
                 ok = s && ok;
-                if (s && relaunch) relaunchApp(bid);
+                if (s) {
+                    writeBootstrap(bid, lid);
+                    if (relaunch) relaunchApp(bid);
+                }
             } else if ([op isEqualToString:@"delete"]) {
                 ok = opDelete(bid, lid) && ok;
             }

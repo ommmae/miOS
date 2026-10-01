@@ -185,11 +185,22 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
 @property (nonatomic, strong) UILabel *advertisingIDLabel;
 @property (nonatomic, assign) BOOL spoofCloudToken;
 
-// Network & sensor spoofing (values are derived per-container automatically)
+// Network & sensor spoofing
 @property (nonatomic, assign) BOOL spoofCarrier;
 @property (nonatomic, assign) BOOL spoofWiFi;
 @property (nonatomic, assign) BOOL spoofBattery;
 @property (nonatomic, assign) BOOL spoofLocale;
+@property (nonatomic, copy) NSString *carrierName;
+@property (nonatomic, copy) NSString *carrierMCC;
+@property (nonatomic, copy) NSString *carrierMNC;
+@property (nonatomic, copy) NSString *carrierISO;
+@property (nonatomic, copy) NSString *wifiSSID;
+@property (nonatomic, copy) NSString *wifiBSSID;
+@property (nonatomic, strong) UIView *carrierContainer;
+@property (nonatomic, strong) UITextField *carrierField;
+@property (nonatomic, strong) UIView *wifiContainer;
+@property (nonatomic, strong) UITextField *wifiSSIDField;
+@property (nonatomic, strong) UITextField *wifiBSSIDField;
 
 @end
 
@@ -277,7 +288,13 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
     _advertisingID = _editingContainer.advertisingID.length > 0 ? _editingContainer.advertisingID : nil;
     _spoofCloudToken = _editingContainer.spoofCloudToken;
     _spoofCarrier = _editingContainer.spoofCarrier;
+    _carrierName = _editingContainer.carrierName;
+    _carrierMCC = _editingContainer.carrierMCC;
+    _carrierMNC = _editingContainer.carrierMNC;
+    _carrierISO = _editingContainer.carrierISO;
     _spoofWiFi = _editingContainer.spoofWiFi;
+    _wifiSSID = _editingContainer.wifiSSID;
+    _wifiBSSID = _editingContainer.wifiBSSID;
     _spoofBattery = _editingContainer.spoofBattery;
     _spoofLocale = _editingContainer.spoofLocale;
 
@@ -773,6 +790,8 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
     _spoofWiFi = YES;
     _spoofBattery = NO;
     _spoofLocale = NO;
+    [self randomizeCarrier];
+    [self randomizeWiFi];
 
     [self buildStep2Content];
 
@@ -1296,13 +1315,19 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
     _customDeviceNameField = [self pillFieldWithPlaceholder:@"Custom device name" icon:@"character.cursor.ibeam"];
     _customDeviceNameField.text = _customDeviceNameText;
     [_customDeviceNameField addTarget:self action:@selector(customNameChanged:) forControlEvents:UIControlEventEditingChanged];
+    UIButton *nameRnd = [self randomizeButtonWithSel:@selector(randomizeDeviceName)];
     [_customDeviceNameContainer addSubview:_customDeviceNameField];
+    [_customDeviceNameContainer addSubview:nameRnd];
     [NSLayoutConstraint activateConstraints:@[
         [_customDeviceNameField.topAnchor constraintEqualToAnchor:_customDeviceNameContainer.topAnchor constant:2],
         [_customDeviceNameField.leadingAnchor constraintEqualToAnchor:_customDeviceNameContainer.leadingAnchor constant:12],
-        [_customDeviceNameField.trailingAnchor constraintEqualToAnchor:_customDeviceNameContainer.trailingAnchor constant:-12],
         [_customDeviceNameField.heightAnchor constraintEqualToConstant:46],
         [_customDeviceNameField.bottomAnchor constraintEqualToAnchor:_customDeviceNameContainer.bottomAnchor constant:-12],
+        [nameRnd.leadingAnchor constraintEqualToAnchor:_customDeviceNameField.trailingAnchor constant:8],
+        [nameRnd.trailingAnchor constraintEqualToAnchor:_customDeviceNameContainer.trailingAnchor constant:-12],
+        [nameRnd.centerYAnchor constraintEqualToAnchor:_customDeviceNameField.centerYAnchor],
+        [nameRnd.widthAnchor constraintEqualToConstant:46],
+        [nameRnd.heightAnchor constraintEqualToConstant:46],
     ]];
     [section addCellView:_customDeviceNameContainer];
 
@@ -1314,9 +1339,68 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
     _customDeviceNameText = field.text;
 }
 
+- (void)randomizeDeviceName {
+    NSArray *names = [[self class] deviceNameTemplates];
+    _customDeviceNameText = names[arc4random_uniform((uint32_t)names.count)];
+    _customDeviceNameField.text = _customDeviceNameText;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+}
+
+// Ghost-style carrier table: {name, MCC, MNC, ISO}.
++ (NSArray<NSArray<NSString *> *> *)carrierTable {
+    return @[
+        @[@"Verizon",    @"311", @"480", @"us"],
+        @[@"AT&T",       @"310", @"410", @"us"],
+        @[@"T-Mobile",   @"310", @"260", @"us"],
+        @[@"Sprint",     @"310", @"120", @"us"],
+        @[@"Vodafone",   @"234", @"15",  @"gb"],
+        @[@"EE",         @"234", @"30",  @"gb"],
+        @[@"O2",         @"234", @"10",  @"gb"],
+        @[@"Three",      @"234", @"20",  @"gb"],
+        @[@"Orange",     @"208", @"01",  @"fr"],
+        @[@"SFR",        @"208", @"10",  @"fr"],
+        @[@"Telekom",    @"262", @"01",  @"de"],
+        @[@"Vodafone",   @"262", @"02",  @"de"],
+        @[@"TIM",        @"222", @"01",  @"it"],
+        @[@"Movistar",   @"214", @"07",  @"es"],
+        @[@"MTS",        @"250", @"01",  @"ru"],
+        @[@"Beeline",    @"250", @"99",  @"ru"],
+        @[@"MegaFon",    @"250", @"02",  @"ru"],
+        @[@"Rogers",     @"302", @"720", @"ca"],
+        @[@"Bell",       @"302", @"610", @"ca"],
+        @[@"Telstra",    @"505", @"01",  @"au"],
+        @[@"NTT docomo", @"440", @"10",  @"jp"],
+        @[@"SK Telecom", @"450", @"05",  @"kr"],
+    ];
+}
+
+// Ghost-style Wi-Fi SSID bases.
++ (NSArray<NSString *> *)ssidBases {
+    return @[@"NETGEAR", @"Linksys", @"TP-Link", @"ASUS", @"dlink", @"Xfinity",
+             @"ATT-WiFi", @"HOME", @"MyWiFi", @"orbi", @"eero", @"Spectrum"];
+}
+
+// Ghost-style device names.
++ (NSArray<NSString *> *)deviceNameTemplates {
+    return @[@"iPhone", @"John's iPhone", @"Emma's iPhone", @"Michael's iPhone",
+             @"Sarah's iPhone", @"David's iPhone", @"iPhone 15 Pro", @"My iPhone",
+             @"Alex's iPhone", @"Olivia's iPhone", @"James's iPhone", @"Mom's iPhone"];
+}
+
+- (NSString *)randomHexByte {
+    return [NSString stringWithFormat:@"%02X", arc4random_uniform(256)];
+}
+
+- (NSString *)randomBSSID {
+    return [NSString stringWithFormat:@"%@:%@:%@:%@:%@:%@",
+            [self randomHexByte], [self randomHexByte], [self randomHexByte],
+            [self randomHexByte], [self randomHexByte], [self randomHexByte]];
+}
+
 - (void)buildNetworkSpoofSection {
     MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@"Network & Sensors"];
 
+    // --- Carrier ---
     MiOSToggleCell *carrierToggle = [[MiOSToggleCell alloc] initWithTitle:@"Carrier Spoof"
                                                                  subtitle:@"Fake carrier name, MCC/MNC & country"
                                                                      icon:@"antenna.radiowaves.left.and.right"
@@ -1325,8 +1409,31 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
     carrierToggle.isOn = _spoofCarrier;
     carrierToggle.delegate = self;
     [section addCellView:carrierToggle];
+
+    _carrierContainer = [[UIView alloc] init];
+    _carrierContainer.translatesAutoresizingMaskIntoConstraints = NO;
+    _carrierContainer.hidden = !_spoofCarrier;
+    _carrierField = [self pillFieldWithPlaceholder:@"Carrier name" icon:@"antenna.radiowaves.left.and.right"];
+    _carrierField.text = _carrierName;
+    [_carrierField addTarget:self action:@selector(carrierFieldChanged:) forControlEvents:UIControlEventEditingChanged];
+    UIButton *carrierRnd = [self randomizeButtonWithSel:@selector(randomizeCarrier)];
+    [_carrierContainer addSubview:_carrierField];
+    [_carrierContainer addSubview:carrierRnd];
+    [NSLayoutConstraint activateConstraints:@[
+        [_carrierField.topAnchor constraintEqualToAnchor:_carrierContainer.topAnchor constant:2],
+        [_carrierField.leadingAnchor constraintEqualToAnchor:_carrierContainer.leadingAnchor constant:12],
+        [_carrierField.heightAnchor constraintEqualToConstant:46],
+        [_carrierField.bottomAnchor constraintEqualToAnchor:_carrierContainer.bottomAnchor constant:-12],
+        [carrierRnd.leadingAnchor constraintEqualToAnchor:_carrierField.trailingAnchor constant:8],
+        [carrierRnd.trailingAnchor constraintEqualToAnchor:_carrierContainer.trailingAnchor constant:-12],
+        [carrierRnd.centerYAnchor constraintEqualToAnchor:_carrierField.centerYAnchor],
+        [carrierRnd.widthAnchor constraintEqualToConstant:46],
+        [carrierRnd.heightAnchor constraintEqualToConstant:46],
+    ]];
+    [section addCellView:_carrierContainer];
     [section addSeparator];
 
+    // --- Wi-Fi ---
     MiOSToggleCell *wifiToggle = [[MiOSToggleCell alloc] initWithTitle:@"Wi-Fi Spoof"
                                                              subtitle:@"Fake SSID & BSSID for this container"
                                                                  icon:@"wifi"
@@ -1335,8 +1442,39 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
     wifiToggle.isOn = _spoofWiFi;
     wifiToggle.delegate = self;
     [section addCellView:wifiToggle];
+
+    _wifiContainer = [[UIView alloc] init];
+    _wifiContainer.translatesAutoresizingMaskIntoConstraints = NO;
+    _wifiContainer.hidden = !_spoofWiFi;
+    _wifiSSIDField = [self pillFieldWithPlaceholder:@"Wi-Fi SSID" icon:@"wifi"];
+    _wifiSSIDField.text = _wifiSSID;
+    [_wifiSSIDField addTarget:self action:@selector(wifiSSIDChanged:) forControlEvents:UIControlEventEditingChanged];
+    _wifiBSSIDField = [self pillFieldWithPlaceholder:@"BSSID (AA:BB:CC:DD:EE:FF)" icon:@"dot.radiowaves.left.and.right"];
+    _wifiBSSIDField.text = _wifiBSSID;
+    [_wifiBSSIDField addTarget:self action:@selector(wifiBSSIDChanged:) forControlEvents:UIControlEventEditingChanged];
+    UIButton *wifiRnd = [self randomizeButtonWithSel:@selector(randomizeWiFi)];
+    [_wifiContainer addSubview:_wifiSSIDField];
+    [_wifiContainer addSubview:_wifiBSSIDField];
+    [_wifiContainer addSubview:wifiRnd];
+    [NSLayoutConstraint activateConstraints:@[
+        [_wifiSSIDField.topAnchor constraintEqualToAnchor:_wifiContainer.topAnchor constant:2],
+        [_wifiSSIDField.leadingAnchor constraintEqualToAnchor:_wifiContainer.leadingAnchor constant:12],
+        [_wifiSSIDField.heightAnchor constraintEqualToConstant:46],
+        [wifiRnd.leadingAnchor constraintEqualToAnchor:_wifiSSIDField.trailingAnchor constant:8],
+        [wifiRnd.trailingAnchor constraintEqualToAnchor:_wifiContainer.trailingAnchor constant:-12],
+        [wifiRnd.centerYAnchor constraintEqualToAnchor:_wifiSSIDField.centerYAnchor],
+        [wifiRnd.widthAnchor constraintEqualToConstant:46],
+        [wifiRnd.heightAnchor constraintEqualToConstant:46],
+        [_wifiBSSIDField.topAnchor constraintEqualToAnchor:_wifiSSIDField.bottomAnchor constant:8],
+        [_wifiBSSIDField.leadingAnchor constraintEqualToAnchor:_wifiContainer.leadingAnchor constant:12],
+        [_wifiBSSIDField.trailingAnchor constraintEqualToAnchor:_wifiContainer.trailingAnchor constant:-12],
+        [_wifiBSSIDField.heightAnchor constraintEqualToConstant:46],
+        [_wifiBSSIDField.bottomAnchor constraintEqualToAnchor:_wifiContainer.bottomAnchor constant:-12],
+    ]];
+    [section addCellView:_wifiContainer];
     [section addSeparator];
 
+    // --- Battery ---
     MiOSToggleCell *batteryToggle = [[MiOSToggleCell alloc] initWithTitle:@"Battery Spoof"
                                                                  subtitle:@"Report a fixed battery level & state"
                                                                      icon:@"battery.100"
@@ -1347,6 +1485,7 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
     [section addCellView:batteryToggle];
     [section addSeparator];
 
+    // --- Time zone ---
     MiOSToggleCell *localeToggle = [[MiOSToggleCell alloc] initWithTitle:@"Time Zone Spoof"
                                                                 subtitle:@"Override reported system time zone"
                                                                     icon:@"globe"
@@ -1357,6 +1496,41 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
     [section addCellView:localeToggle];
 
     [_step2Stack addArrangedSubview:section];
+}
+
+- (UIButton *)randomizeButtonWithSel:(SEL)sel {
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
+    btn.translatesAutoresizingMaskIntoConstraints = NO;
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold];
+    [btn setImage:[UIImage systemImageNamed:@"shuffle" withConfiguration:cfg] forState:UIControlStateNormal];
+    btn.tintColor = [MiOSTheme accentColor];
+    btn.backgroundColor = [[MiOSTheme accentColor] colorWithAlphaComponent:0.14];
+    btn.layer.cornerRadius = 14;
+    btn.layer.cornerCurve = kCACornerCurveContinuous;
+    [btn addTarget:self action:sel forControlEvents:UIControlEventTouchUpInside];
+    return btn;
+}
+
+- (void)carrierFieldChanged:(UITextField *)f { _carrierName = f.text; }
+- (void)wifiSSIDChanged:(UITextField *)f { _wifiSSID = f.text; }
+- (void)wifiBSSIDChanged:(UITextField *)f { _wifiBSSID = f.text; }
+
+- (void)randomizeCarrier {
+    NSArray *table = [[self class] carrierTable];
+    NSArray<NSString *> *c = table[arc4random_uniform((uint32_t)table.count)];
+    _carrierName = c[0]; _carrierMCC = c[1]; _carrierMNC = c[2]; _carrierISO = c[3];
+    _carrierField.text = _carrierName;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+}
+
+- (void)randomizeWiFi {
+    NSArray *bases = [[self class] ssidBases];
+    _wifiSSID = [NSString stringWithFormat:@"%@-%04X",
+                 bases[arc4random_uniform((uint32_t)bases.count)], arc4random_uniform(0xFFFF)];
+    _wifiBSSID = [self randomBSSID];
+    _wifiSSIDField.text = _wifiSSID;
+    _wifiBSSIDField.text = _wifiBSSID;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
 }
 
 - (void)updateDeviceCardUIAnimated:(BOOL)animated {
@@ -1535,7 +1709,13 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
     config.spoofCloudToken = _spoofCloudToken;
 
     config.spoofCarrier = _spoofCarrier;
+    config.carrierName = _carrierName;
+    config.carrierMCC = _carrierMCC;
+    config.carrierMNC = _carrierMNC;
+    config.carrierISO = _carrierISO;
     config.spoofWiFi = _spoofWiFi;
+    config.wifiSSID = _wifiSSID;
+    config.wifiBSSID = _wifiBSSID;
     config.spoofBattery = _spoofBattery;
     config.spoofLocale = _spoofLocale;
 
@@ -1642,8 +1822,12 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
         _spoofCloudToken = value;
     } else if ([key isEqualToString:@"spoofCarrier"]) {
         _spoofCarrier = value;
+        _carrierContainer.hidden = !value;
+        if (value && _carrierName.length == 0) [self randomizeCarrier];
     } else if ([key isEqualToString:@"spoofWiFi"]) {
         _spoofWiFi = value;
+        _wifiContainer.hidden = !value;
+        if (value && _wifiSSID.length == 0) [self randomizeWiFi];
     } else if ([key isEqualToString:@"spoofBattery"]) {
         _spoofBattery = value;
     } else if ([key isEqualToString:@"spoofLocale"]) {

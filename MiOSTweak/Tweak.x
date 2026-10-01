@@ -76,12 +76,6 @@ static BOOL isMiOSEnabled(void) {
     return [prefs[@"enabled"] boolValue];
 }
 
-static NSDictionary *appPrefs(NSString *bid) {
-    NSString *path = [NSString stringWithFormat:
-        @"/var/mobile/Library/Preferences/MiOS/apps/%@.plist", bid];
-    return [NSDictionary dictionaryWithContentsOfFile:path] ?: @{};
-}
-
 static BOOL deviceSpoofEnabled(void) {
     return [gSpoof[@"deviceSpoofEnabled"] boolValue];
 }
@@ -668,7 +662,7 @@ static void miosBuildSpoofCache(void) {
         gBundleID = [[NSBundle mainBundle] bundleIdentifier];
         if (gBundleID.length == 0 || [gBundleID isEqualToString:@"com.mios.app"]) return;
 
-        // Grant the sandbox extension first so the central MiOS folder is reachable.
+        // Grant the sandbox extension (used for the central-prefs fallback path below).
         void *sandyHandle = dlopen("/usr/lib/libsandy.dylib", RTLD_LAZY);
         if (!sandyHandle) sandyHandle = dlopen("/var/jb/usr/lib/libsandy.dylib", RTLD_LAZY);
         if (sandyHandle) {
@@ -676,31 +670,31 @@ static void miosBuildSpoofCache(void) {
             if (applyProfile) applyProfile("MiOS-Profile");
         }
 
-        if (!isMiOSEnabled()) return;
+        NSString *uuid = nil;
 
-        MiOSContainerManager *mgr = [MiOSContainerManager sharedManager];
-        BOOL containerEnabled = [appPrefs(gBundleID)[@"containerEnabled"] boolValue];
-        NSString *uuid = [mgr activeContainerUUIDForBundleID:gBundleID];
-
-        NSDictionary *corePrefs = [NSDictionary dictionaryWithContentsOfFile:
-            @"/var/mobile/Library/Preferences/MiOS/com.mios.core.plist"];
-        // Default ON so container sessions persist; only off if explicitly disabled.
-        gKeychainIsolation = corePrefs[@"keychainIsolation"] ? [corePrefs[@"keychainIsolation"] boolValue] : YES;
-
-        // NOTE: file-level containerization is NOT done in-process anymore. The privileged daemon
-        // (miosd) reassigns the app's REAL data container before launch, so the app runs natively in
-        // the right container (files + preferences isolate on their own, no mach-port guard crash).
-        // The tweak only does spoofing + optional keychain namespacing below.
-        (void)containerEnabled;
-        if (gKeychainIsolation && uuid) {
-            gKcPrefix = [NSString stringWithFormat:@"__mios_%@_", uuid];
-            miosInitKeychainNamespace();
+        // PRIMARY: the daemon drops a bootstrap file INSIDE our own container when it switches us in.
+        // Our own HOME is always readable in-sandbox, so this works with no libSandy / central access.
+        NSString *bootPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Preferences/com.mios.active.plist"];
+        NSDictionary *boot = [NSDictionary dictionaryWithContentsOfFile:bootPath];
+        if ([boot[@"uuid"] isKindOfClass:[NSString class]]) {
+            uuid = boot[@"uuid"];
+            gSpoof = [boot[@"spoof"] isKindOfClass:[NSDictionary class]] ? boot[@"spoof"] : @{};
+        } else {
+            // FALLBACK: read the central MiOS prefs (needs libSandy + the global enable switch).
+            if (!isMiOSEnabled()) return;
+            MiOSContainerManager *mgr = [MiOSContainerManager sharedManager];
+            uuid = [mgr activeContainerUUIDForBundleID:gBundleID];
+            if (uuid) gSpoof = [mgr spoofPrefsForBundleID:gBundleID];
         }
 
-        // 2. Per-container spoof: device model, identifiers, GPS. Only for container apps.
+        // Only container apps go further. Keychain isolation is always on so sessions persist.
         if (!uuid) return;
-        gSpoof = [mgr spoofPrefsForBundleID:gBundleID];
         gContainerUUID = uuid;
+        gKeychainIsolation = YES;
+        gKcPrefix = [NSString stringWithFormat:@"__mios_%@_", uuid];
+        miosInitKeychainNamespace();
+
+        if (!gSpoof) gSpoof = @{};
         gSpoofSerial = derivedHex(uuid, @"serial", 11);
         gSpoofUDID = derivedHex(uuid, @"udid", 25);
 
