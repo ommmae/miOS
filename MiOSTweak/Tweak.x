@@ -7,8 +7,6 @@
 #import <sys/sysctl.h>
 #import <sys/utsname.h>
 #import <errno.h>
-#import <mach-o/dyld.h>
-#import "fishhook.h"
 #import "MiOSContainerManager.h"
 
 // MARK: - Private declarations
@@ -61,11 +59,6 @@ static char     *gcModel    = NULL;   // hw.model                    (hwModel)
 static uint64_t  gcMemsize  = 0;      // 0 = leave as-is
 static int       gcCPU      = 0;      // 0 = leave as-is
 static CFDictionaryRef gcWifiInfo     = NULL;   // pre-built SSID/BSSID dict; NULL = don't spoof
-// MobileGestalt values, spoofed ONLY for the app's own images via fishhook (never a global hook).
-static CFStringRef gcMGProductType    = NULL;   // ProductType / HWModelStr  (deviceIdentifier)
-static CFStringRef gcMGHWModel        = NULL;   // HardwarePlatform          (hwModel)
-static CFStringRef gcMGDeviceName     = NULL;   // DeviceName / marketing-name
-static CFStringRef gcMGProductVersion = NULL;   // ProductVersion            (iosVersion)
 
 // Defined lower down; used by the derivation helpers below.
 static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length);
@@ -612,55 +605,6 @@ static CFDictionaryRef hook_CNCopyCurrentNetworkInfo(CFStringRef interfaceName) 
     return orig_CNCopyCurrentNetworkInfo ? orig_CNCopyCurrentNetworkInfo(interfaceName) : NULL;
 }
 
-// MARK: - MobileGestalt, spoofed ONLY for the app's own images (via fishhook symbol rebinding).
-// This never touches the real MGCopyAnswer, so CoreTelephony's hasBaseband() and jailbreak-bypass
-// tweaks (Shadow) that also hook it are unaffected — that is what caused the earlier EXC_GUARD /
-// EXC_BREAKPOINT crashes when MGCopyAnswer was hooked globally with MSHookFunction.
-static CFTypeRef (*real_MGCopyAnswer)(CFStringRef) = NULL;
-static void *(*real_dlsym)(void *, const char *) = NULL;
-
-static CFTypeRef fish_MGCopyAnswer(CFStringRef key) {
-    if (gDeviceSpoofActive && key) {
-        if (gcMGProductType && (CFEqual(key, CFSTR("ProductType")) || CFEqual(key, CFSTR("HWModelStr"))))
-            return CFRetain(gcMGProductType);
-        if (gcMGDeviceName && (CFEqual(key, CFSTR("DeviceName")) || CFEqual(key, CFSTR("marketing-name")) || CFEqual(key, CFSTR("UserAssignedDeviceName"))))
-            return CFRetain(gcMGDeviceName);
-        if (gcMGHWModel && CFEqual(key, CFSTR("HardwarePlatform")))
-            return CFRetain(gcMGHWModel);
-        if (gcMGProductVersion && CFEqual(key, CFSTR("ProductVersion")))
-            return CFRetain(gcMGProductVersion);
-    }
-    if (real_MGCopyAnswer) return real_MGCopyAnswer(key);
-    // Fall back to the live function if rebinding never captured the original.
-    void *mgH = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
-    CFTypeRef (*fn)(CFStringRef) = mgH ? (CFTypeRef(*)(CFStringRef))dlsym(mgH, "MGCopyAnswer") : NULL;
-    return fn ? fn(key) : NULL;
-}
-
-// Apps (FB/Instagram) often resolve MGCopyAnswer at runtime via dlsym instead of a linked symbol,
-// which a symbol rebind cannot catch. Intercept dlsym so such a lookup hands back our replacement.
-static void *fish_dlsym(void *handle, const char *symbol) {
-    if (symbol && gDeviceSpoofActive && strcmp(symbol, "MGCopyAnswer") == 0 &&
-        (gcMGProductType || gcMGProductVersion || gcMGDeviceName || gcMGHWModel)) {
-        return (void *)fish_MGCopyAnswer;
-    }
-    if (real_dlsym) return real_dlsym(handle, symbol);
-    return dlsym(handle, symbol);
-}
-
-// Rebind MGCopyAnswer + dlsym across ALL images (and future ones). This is safe: fishhook rewrites
-// the CALLERS' symbol pointers, never the real function, so CoreTelephony's own MGCopyAnswer calls
-// and jailbreak-bypass tweaks (Shadow) that inline-hook it keep working. Our hook only overrides the
-// device-identity keys and passes everything else to the real function.
-static void miosRebindMG(void) {
-    if (!gcMGProductType && !gcMGProductVersion && !gcMGDeviceName && !gcMGHWModel) return;
-    struct rebinding rebindings[] = {
-        { "MGCopyAnswer", (void *)fish_MGCopyAnswer, (void **)&real_MGCopyAnswer },
-        { "dlsym",        (void *)fish_dlsym,        (void **)&real_dlsym },
-    };
-    rebind_symbols(rebindings, 2);
-}
-
 // MARK: - Derived unique-device identifiers (stable per container)
 
 static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
@@ -685,11 +629,6 @@ static char *dupCString(NSString *s) {
     return c ? strdup(c) : NULL;
 }
 
-static CFStringRef retainedCF(NSString *s) {
-    if (s.length == 0) return NULL;
-    return (__bridge_retained CFStringRef)[s copy];
-}
-
 static void miosBuildSpoofCache(void) {
     gDeviceSpoofActive = deviceSpoofEnabled();
     if (gDeviceSpoofActive) {
@@ -697,10 +636,6 @@ static void miosBuildSpoofCache(void) {
         gcModel   = dupCString(spoofStr(@"hwModel"));
         gcMemsize = spoofedMemsize();
         gcCPU     = (int)spoofedCPUCores();
-        gcMGProductType    = retainedCF(spoofStr(@"deviceIdentifier"));
-        gcMGHWModel        = retainedCF(spoofStr(@"hwModel"));
-        gcMGDeviceName     = retainedCF(spoofStr(@"deviceName"));
-        gcMGProductVersion = retainedCF(spoofStr(@"iosVersion"));
     }
     if (wifiSpoofActive()) {
         NSString *ssid  = derivedSSID();
@@ -785,10 +720,11 @@ static void miosBuildSpoofCache(void) {
             sysctlbyname("hw.machine", b1, &s1, NULL, 0);
             selfTestAfter = @(b1);
 
-            // MGCopyAnswer: rebind the symbol (and dlsym) across images so apps like Instagram that
-            // read MobileGestalt — directly or via dlsym — see the spoofed model/iOS. Safe: no inline
-            // hook of the real function, so CoreTelephony/Shadow are unaffected.
-            miosRebindMG();
+            // NOTE: we intentionally do NOT touch MGCopyAnswer (neither inline hook, symbol rebind,
+            // nor dlsym interception). Every one of those crashes this app (CoreTelephony's init path
+            // and the Shadow jailbreak-bypass tweak both go through MGCopyAnswer). Ghost does the same
+            // — it never touches MGCopyAnswer — and still spoofs the iOS version via UIDevice /
+            // NSProcessInfo, which is what we rely on here.
         }
 
         // Extra probes: what does uname() report, and what does MGCopyAnswer("ProductType") report?
