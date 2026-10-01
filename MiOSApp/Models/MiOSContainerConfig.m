@@ -1,4 +1,5 @@
 #import "MiOSContainerConfig.h"
+#import "../Utils/MiOSContainerDaemonClient.h"
 
 static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/MiOS/com.mios.containers.plist";
 
@@ -117,9 +118,9 @@ static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/
             [activeContainers removeObjectForKey:bundleID];
         }
     }
-    // Container data lives inside each app's own sandbox (the tweak owns it there and
-    // cannot be reached from here); only the central config is removed.
     [fm removeItemAtPath:[[self class] spoofPrefsPathForUUID:self.identifier] error:nil];
+    // The real OS container is owned by the daemon; ask it to destroy this one.
+    [MiOSContainerDaemonClient deleteContainer:self.identifier forApps:self.apps];
 
     if (containerPrefs) {
         containerPrefs[@"activeContainers"] = activeContainers;
@@ -249,6 +250,10 @@ static NSString *const kContainersPlistPath = @"/var/mobile/Library/Preferences/
 
     containerPrefs[@"activeContainers"] = activeContainers;
     [containerPrefs writeToFile:containerPrefsPath atomically:YES];
+
+    // Ask the privileged daemon to make this the active REAL container for each app (minting it the
+    // first time) and relaunch the app into it. This is the actual file isolation (Crane model).
+    [MiOSContainerDaemonClient switchToContainer:self.identifier forApps:self.apps relaunch:YES];
 }
 
 @end

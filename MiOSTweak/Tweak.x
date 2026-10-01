@@ -6,7 +6,6 @@
 #import <dlfcn.h>
 #import <sys/sysctl.h>
 #import "MiOSContainerManager.h"
-#import "MiOSContainerMint.h"
 
 // MARK: - Private declarations
 
@@ -27,14 +26,11 @@ typedef CFTypeRef (*MGCopyAnswer_t)(CFStringRef key);
 // MARK: - Shared runtime state (resolved once, in the constructor)
 
 static NSString *gBundleID = nil;
-static NSString *gContainerHome = nil;         // redirected HOME, or nil for the default container
-static NSString *gContainerTmp = nil;
 static NSDictionary *gSpoof = nil;             // per-container spoof prefs
 static NSString *gSpoofSerial = nil;           // derived, stable per container
 static NSString *gSpoofUDID = nil;
 static NSString *gKcPrefix = nil;              // per-container keychain namespace prefix
-static BOOL gKeychainIsolation = NO;           // opt-in (core plist); validate the core redirect first
-static BOOL gPrefsIsolation = NO;
+static BOOL gKeychainIsolation = NO;           // opt-in (core plist): separate keychain per container
 
 static BOOL isMiOSEnabled(void) {
     NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:
@@ -55,21 +51,6 @@ static BOOL deviceSpoofEnabled(void) {
 static NSString *spoofStr(NSString *key) {
     id v = gSpoof[key];
     return [v isKindOfClass:[NSString class]] ? v : @"";
-}
-
-// MARK: - Home-directory redirect hooks
-//
-// setenv(HOME/CFFIXED_USER_HOME) alone is not enough from an injected tweak: by the time our
-// constructor runs the home path may already be cached, so we also force NSHomeDirectory/
-// NSTemporaryDirectory to the container. (These hooks are safe at launch; the earlier splash
-// hang came from the device-spoof hooks, not these.)
-static NSString *(*orig_NSHomeDirectory)(void);
-static NSString *hook_NSHomeDirectory(void) {
-    return gContainerHome ?: orig_NSHomeDirectory();
-}
-static NSString *(*orig_NSTemporaryDirectory)(void);
-static NSString *hook_NSTemporaryDirectory(void) {
-    return gContainerTmp ?: orig_NSTemporaryDirectory();
 }
 
 // MARK: - GPS Location Hooks (per container)
@@ -344,43 +325,6 @@ static void miosInitKeychainNamespace(void) {
     MSHookFunction((void *)SecItemDelete, (void *)new_SecItemDelete, (void **)&orig_SecItemDelete);
 }
 
-// MARK: - Preferences redirect (per container, like LiveContainer)
-//
-// Swizzle the private CFPrefsPlistSource initializer and force its container path to the
-// redirected HOME for non-Apple domains, so NSUserDefaults/CFPreferences read and write
-// <container>/Library/Preferences/<domain>.plist instead of the real container's.
-
-static BOOL miosIsAppleDomain(NSString *domain) {
-    return [domain hasPrefix:@"com.apple."] || [domain hasPrefix:@"group.com.apple."]
-        || [domain hasPrefix:@"systemgroup.com.apple."];
-}
-
-@interface MiOSPrefsSourceShim : NSObject
-@end
-@implementation MiOSPrefsSourceShim
-- (id)mios_initWithDomain:(CFStringRef)domain user:(CFStringRef)user byHost:(bool)host
-            containerPath:(CFStringRef)containerPath containingPreferences:(id)prefs {
-    if (gContainerHome.length == 0 || miosIsAppleDomain((__bridge NSString *)domain)) {
-        return [self mios_initWithDomain:domain user:user byHost:host containerPath:containerPath containingPreferences:prefs];
-    }
-    if (user == kCFPreferencesAnyUser) user = kCFPreferencesCurrentUser;
-    return [self mios_initWithDomain:domain user:user byHost:host
-                       containerPath:(__bridge CFStringRef)gContainerHome containingPreferences:prefs];
-}
-@end
-
-static void miosInitPrefsRedirect(void) {
-    Class src = NSClassFromString(@"CFPrefsPlistSource");
-    SEL orig = NSSelectorFromString(@"initWithDomain:user:byHost:containerPath:containingPreferences:");
-    SEL repl = @selector(mios_initWithDomain:user:byHost:containerPath:containingPreferences:);
-    Method origM = src ? class_getInstanceMethod(src, orig) : NULL;
-    Method replM = class_getInstanceMethod([MiOSPrefsSourceShim class], repl);
-    if (!origM || !replM) return; // private API moved; skip rather than crash
-
-    class_addMethod(src, repl, method_getImplementation(replM), method_getTypeEncoding(replM));
-    Method added = class_getInstanceMethod(src, repl);
-    if (added) method_exchangeImplementations(origM, added);
-}
 
 // MARK: - sysctlbyname (hw.machine / hw.model)
 
@@ -472,42 +416,16 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
 
         NSDictionary *corePrefs = [NSDictionary dictionaryWithContentsOfFile:
             @"/var/mobile/Library/Preferences/MiOS/com.mios.core.plist"];
-        // Opt-in isolation layers (core plist). Default off so the core redirect is validated first.
         gKeychainIsolation = [corePrefs[@"keychainIsolation"] boolValue];
-        gPrefsIsolation = [corePrefs[@"prefsIsolation"] boolValue];
-        // File-level containerization (HOME redirect) is still experimental and currently crashes
-        // some apps, so it is opt-in. Default OFF means apps launch normally (spoof-only).
-        BOOL fileIsolation = [corePrefs[@"fileIsolation"] boolValue];
 
-        // 1. Redirect the whole home directory into the container (the Crane/LiveContainer core).
-        //    Data lives inside the app's OWN data container, so the sandbox always allows it.
-        if (fileIsolation && containerEnabled && uuid) {
-            // Mint / reuse a REAL OS data container (stock-like), not a subfolder. A subfolder is
-            // not a genuine container and triggers the mach-port/data-protection guard crash.
-            NSString *home = [MiOSContainerMint realHomeForBundle:gBundleID logicalID:uuid];
-            // Probe that we can actually write there before committing; otherwise leave the app alone.
-            BOOL writable = NO;
-            if (home.length > 0) {
-                NSString *probe = [home stringByAppendingPathComponent:@".mios_write_probe"];
-                writable = [@"ok" writeToFile:probe atomically:YES encoding:NSUTF8StringEncoding error:nil];
-                if (writable) [[NSFileManager defaultManager] removeItemAtPath:probe error:nil];
-            }
-            if (writable) {
-                gContainerHome = home;
-                gContainerTmp = [home stringByAppendingPathComponent:@"tmp"];
-                setenv("CFFIXED_USER_HOME", home.UTF8String, 1);
-                setenv("HOME", home.UTF8String, 1);
-                // Force the cached home/tmp too — setenv alone is too late in an injected tweak.
-                MSHookFunction((void *)NSHomeDirectory, (void *)hook_NSHomeDirectory, (void **)&orig_NSHomeDirectory);
-                MSHookFunction((void *)NSTemporaryDirectory, (void *)hook_NSTemporaryDirectory, (void **)&orig_NSTemporaryDirectory);
-
-                // Per-container preferences and keychain (opt-in; so each container is its own account).
-                if (gPrefsIsolation) miosInitPrefsRedirect();
-                if (gKeychainIsolation) {
-                    gKcPrefix = [NSString stringWithFormat:@"__mios_%@_", uuid];
-                    miosInitKeychainNamespace();
-                }
-            }
+        // NOTE: file-level containerization is NOT done in-process anymore. The privileged daemon
+        // (miosd) reassigns the app's REAL data container before launch, so the app runs natively in
+        // the right container (files + preferences isolate on their own, no mach-port guard crash).
+        // The tweak only does spoofing + optional keychain namespacing below.
+        (void)containerEnabled;
+        if (gKeychainIsolation && uuid) {
+            gKcPrefix = [NSString stringWithFormat:@"__mios_%@_", uuid];
+            miosInitKeychainNamespace();
         }
 
         // 2. Per-container spoof: device model, identifiers, GPS. Only for container apps.

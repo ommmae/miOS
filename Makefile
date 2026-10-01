@@ -19,8 +19,16 @@ MiOS_PRIVATE_FRAMEWORKS = MobileCoreServices
 MiOS_INSTALL_PATH = /Applications
 MiOS_CODESIGN_FLAGS = -Sentitlements.plist
 
+TOOL_NAME = miosd
+miosd_FILES = $(wildcard MiOSDaemon/*.m)
+miosd_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
+miosd_FRAMEWORKS = Foundation
+miosd_CODESIGN_FLAGS = -Sdaemon-entitlements.plist
+miosd_INSTALL_PATH = /usr/libexec
+
 include $(THEOS_MAKE_PATH)/tweak.mk
 include $(THEOS_MAKE_PATH)/application.mk
+include $(THEOS_MAKE_PATH)/tool.mk
 
 after-install::
 	install.exec "killall -9 SpringBoard"
