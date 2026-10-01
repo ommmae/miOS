@@ -31,4 +31,4 @@ include $(THEOS_MAKE_PATH)/application.mk
 include $(THEOS_MAKE_PATH)/tool.mk
 
 after-install::
-	install.exec "killall -9 SpringBoard"
+	install.exec "killall -9 miosd || true; killall -9 SpringBoard"
