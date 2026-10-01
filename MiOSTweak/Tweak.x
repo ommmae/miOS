@@ -5,12 +5,12 @@
 #import <objc/runtime.h>
 #import <dlfcn.h>
 #import <sys/sysctl.h>
+#import <sys/utsname.h>
 #import "MiOSContainerManager.h"
 
 // MARK: - Private declarations
 
 typedef int (*libSandy_applyProfile_t)(const char *profileName);
-typedef CFTypeRef (*MGCopyAnswer_t)(CFStringRef key);
 
 @interface DCDevice : NSObject
 @property (class, readonly) DCDevice *currentDevice;
@@ -47,24 +47,16 @@ typedef CFDictionaryRef (*CNCopyCurrentNetworkInfo_t)(CFStringRef interfaceName)
 static NSString *gBundleID = nil;
 static NSDictionary *gSpoof = nil;             // per-container spoof prefs
 static NSString *gContainerUUID = nil;         // seed for deterministic per-container derivation
-static NSString *gSpoofSerial = nil;           // derived, stable per container
-static NSString *gSpoofUDID = nil;
 static NSString *gKcPrefix = nil;              // per-container keychain namespace prefix
 static BOOL gKeychainIsolation = YES;          // default on: separate keychain per container (sessions)
 
 // Cached, allocation-free spoof values (built once in the constructor; owned for process lifetime).
-// The low-level C hooks (sysctl/uname/MGCopyAnswer/CNCopy...) read ONLY these, never ObjC.
+// The low-level C hooks (sysctl / uname / CNCopy...) read ONLY these, never ObjC.
 static BOOL      gDeviceSpoofActive = NO;
 static char     *gcMachine  = NULL;   // hw.machine / uname.machine  (deviceIdentifier)
 static char     *gcModel    = NULL;   // hw.model                    (hwModel)
 static uint64_t  gcMemsize  = 0;      // 0 = leave as-is
 static int       gcCPU      = 0;      // 0 = leave as-is
-static CFStringRef gcMGProductType    = NULL;
-static CFStringRef gcMGHWModel        = NULL;
-static CFStringRef gcMGDeviceName     = NULL;
-static CFStringRef gcMGProductVersion = NULL;
-static CFStringRef gcMGSerial         = NULL;
-static CFStringRef gcMGUDID           = NULL;
 static CFDictionaryRef gcWifiInfo     = NULL;   // pre-built SSID/BSSID dict; NULL = don't spoof
 
 // Defined lower down; used by the derivation helpers below.
@@ -532,14 +524,19 @@ static void miosInitKeychainNamespace(void) {
 
 // MARK: - Low-level C hooks (allocation-free)
 //
-// sysctlbyname / uname / MGCopyAnswer / CNCopyCurrentNetworkInfo are all plain C functions that
-// can be called extremely early and from threads where the Objective-C runtime and autorelease
-// pools are not safe to touch (this is what makes a naive device-spoof crash where Ghost doesn't).
+// sysctlbyname / uname / CNCopyCurrentNetworkInfo are plain C functions that can be called extremely
+// early and from threads where the Objective-C runtime and autorelease pools are not safe to touch.
 // So the hot paths below NEVER allocate or message ObjC: everything is precomputed into plain C
-// values / pre-retained CFStrings in miosBuildSpoofCache() and only memcpy'd/CFRetain'd here.
+// values in miosBuildSpoofCache() and only memcpy'd / CFRetain'd here.
+//
+// NOTE: we deliberately DO NOT hook MGCopyAnswer. Ghost (which never crashes) hooks only
+// sysctlbyname/uname/getifaddrs/CNCopyCurrentNetworkInfo and merely *reads* MGCopyAnswer. Replacing
+// MGCopyAnswer is what triggers the EXC_GUARD mach-port crash, because libMobileGestalt is invoked
+// via XPC/mach during very early process + sandbox bring-up. hw.machine via sysctlbyname (plus the
+// UIDevice / NSProcessInfo ObjC hooks) is what apps actually read for the device model anyway.
 
 static int (*orig_sysctlbyname)(const char *, void *, size_t *, void *, size_t);
-static MGCopyAnswer_t orig_MGCopyAnswer = NULL;
+static int (*orig_uname)(struct utsname *);
 static CNCopyCurrentNetworkInfo_t orig_CNCopyCurrentNetworkInfo = NULL;
 
 static int copyCStringOut(void *oldp, size_t *oldlenp, const char *cstr) {
@@ -576,23 +573,12 @@ static int hook_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void
     return ret;
 }
 
-static CFTypeRef hook_MGCopyAnswer(CFStringRef key) {
-    if (gDeviceSpoofActive && key) {
-        if (gcMGProductType && (CFEqual(key, CFSTR("ProductType")) || CFEqual(key, CFSTR("HWModelStr")))) {
-            return CFRetain(gcMGProductType);
-        } else if (gcMGDeviceName && (CFEqual(key, CFSTR("DeviceName")) || CFEqual(key, CFSTR("marketing-name")) || CFEqual(key, CFSTR("UserAssignedDeviceName")))) {
-            return CFRetain(gcMGDeviceName);
-        } else if (gcMGHWModel && CFEqual(key, CFSTR("HardwarePlatform"))) {
-            return CFRetain(gcMGHWModel);
-        } else if (gcMGProductVersion && CFEqual(key, CFSTR("ProductVersion"))) {
-            return CFRetain(gcMGProductVersion);
-        } else if (gcMGSerial && CFEqual(key, CFSTR("SerialNumber"))) {
-            return CFRetain(gcMGSerial);
-        } else if (gcMGUDID && CFEqual(key, CFSTR("UniqueDeviceID"))) {
-            return CFRetain(gcMGUDID);
-        }
-    }
-    return orig_MGCopyAnswer ? orig_MGCopyAnswer(key) : NULL;
+static int hook_uname(struct utsname *buf) {
+    int ret = orig_uname(buf);
+    if (ret != 0 || !buf || !gDeviceSpoofActive || !gcMachine) return ret;
+    strncpy(buf->machine, gcMachine, sizeof(buf->machine) - 1);
+    buf->machine[sizeof(buf->machine) - 1] = '\0';
+    return ret;
 }
 
 static CFDictionaryRef hook_CNCopyCurrentNetworkInfo(CFStringRef interfaceName) {
@@ -624,11 +610,6 @@ static char *dupCString(NSString *s) {
     return c ? strdup(c) : NULL;
 }
 
-static CFStringRef retainedCF(NSString *s) {
-    if (s.length == 0) return NULL;
-    return (__bridge_retained CFStringRef)[s copy];
-}
-
 static void miosBuildSpoofCache(void) {
     gDeviceSpoofActive = deviceSpoofEnabled();
     if (gDeviceSpoofActive) {
@@ -636,12 +617,6 @@ static void miosBuildSpoofCache(void) {
         gcModel   = dupCString(spoofStr(@"hwModel"));
         gcMemsize = spoofedMemsize();
         gcCPU     = (int)spoofedCPUCores();
-        gcMGProductType    = retainedCF(spoofStr(@"deviceIdentifier"));
-        gcMGHWModel        = retainedCF(spoofStr(@"hwModel"));
-        gcMGDeviceName     = retainedCF(spoofStr(@"deviceName"));
-        gcMGProductVersion = retainedCF(spoofStr(@"iosVersion"));
-        gcMGSerial         = retainedCF(gSpoofSerial);
-        gcMGUDID           = retainedCF(gSpoofUDID);
     }
     if (wifiSpoofActive()) {
         NSString *ssid  = derivedSSID();
@@ -695,8 +670,6 @@ static void miosBuildSpoofCache(void) {
         miosInitKeychainNamespace();
 
         if (!gSpoof) gSpoof = @{};
-        gSpoofSerial = derivedHex(uuid, @"serial", 11);
-        gSpoofUDID = derivedHex(uuid, @"udid", 25);
 
         // Precompute every C-hook value NOW (ObjC is safe here), so the low-level hooks never allocate.
         miosBuildSpoofCache();
@@ -710,16 +683,11 @@ static void miosBuildSpoofCache(void) {
         if (deviceSpoofEnabled()) {
             %init(DeviceSpoofHooks);
 
+            // Device model via sysctl + uname (exactly what Ghost hooks). We deliberately do NOT
+            // hook MGCopyAnswer: CoreTelephony calls it during init (hasBaseband) and hooking it
+            // trips an EXC_BREAKPOINT trap there — Ghost only reads MGCopyAnswer, never replaces it.
             MSHookFunction((void *)sysctlbyname, (void *)hook_sysctlbyname, (void **)&orig_sysctlbyname);
-            // NOTE: uname() is intentionally NOT hooked — it is a very small libc function and
-            // inline-hooking it is unsafe; hw.machine via sysctlbyname covers the common path.
-
-            void *mgHandle = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
-            if (!mgHandle) mgHandle = dlopen("/var/jb/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
-            if (mgHandle) {
-                MGCopyAnswer_t mgFn = (MGCopyAnswer_t)dlsym(mgHandle, "MGCopyAnswer");
-                if (mgFn) MSHookFunction((void *)mgFn, (void *)hook_MGCopyAnswer, (void **)&orig_MGCopyAnswer);
-            }
+            MSHookFunction((void *)uname, (void *)hook_uname, (void **)&orig_uname);
         }
 
         // 3. Carrier spoofing (part of the device fingerprint, or standalone).
