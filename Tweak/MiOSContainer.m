@@ -84,17 +84,19 @@ static NSString *kConfigPath(void) { return [MiOSBaseDir() stringByAppendingPath
     return [self containerWithID:[self activeContainerID]];
 }
 - (void)save {
-    NSMutableArray *all = [[MiOSContainer loadAll] mutableCopy];
+    NSMutableArray<MiOSContainer *> *all = [[MiOSContainer loadAll] mutableCopy];
     NSUInteger idx = NSNotFound;
-    for (NSUInteger i = 0; i < all.count; i++)
-        if ([all[i].identifier isEqualToString:self.identifier]) { idx = i; break; }
+    for (NSUInteger i = 0; i < all.count; i++) {
+        MiOSContainer *c = all[i];
+        if ([c.identifier isEqualToString:self.identifier]) { idx = i; break; }
+    }
     if (idx == NSNotFound) [all addObject:self]; else all[idx] = self;
     [MiOSContainer saveAll:all];
 }
 
 + (void)removeContainerWithID:(NSString *)containerID {
     if (containerID.length == 0) return;
-    NSMutableArray *all = [[self loadAll] mutableCopy];
+    NSMutableArray<MiOSContainer *> *all = [[self loadAll] mutableCopy];
     MiOSContainer *removed = nil;
     for (MiOSContainer *c in all) if ([c.identifier isEqualToString:containerID]) { removed = c; break; }
     if (!removed) return;
@@ -102,8 +104,10 @@ static NSString *kConfigPath(void) { return [MiOSBaseDir() stringByAppendingPath
     if (root.length) [[NSFileManager defaultManager] removeItemAtPath:root error:nil];
     [all removeObject:removed];
     [self saveAll:all];
-    if ([[self activeContainerID] isEqualToString:containerID])
-        [self setActiveContainerID:[all firstObject].identifier];
+    if ([[self activeContainerID] isEqualToString:containerID]) {
+        MiOSContainer *next = all.firstObject;
+        [self setActiveContainerID:next.identifier];
+    }
 }
 
 + (void)resetAll {
