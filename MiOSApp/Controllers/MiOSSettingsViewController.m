@@ -6,7 +6,9 @@
 
 extern char **environ;
 
-@interface MiOSSettingsViewController ()
+static NSString *const kMiOSCorePlist = @"/var/mobile/Library/Preferences/MiOS/com.mios.core.plist";
+
+@interface MiOSSettingsViewController () <MiOSToggleCellDelegate>
 @property (nonatomic, strong) UIScrollView *scrollView;
 @property (nonatomic, strong) UIStackView *mainStack;
 @end
@@ -45,8 +47,67 @@ extern char **environ;
     ]];
 
     [self buildAboutSection];
+    [self buildExperimentalSection];
     [self buildDataSection];
     [self buildInfoSection];
+}
+
+#pragma mark - Experimental isolation toggles
+
+- (BOOL)coreBoolForKey:(NSString *)key {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kMiOSCorePlist];
+    return [prefs[key] boolValue];
+}
+
+- (void)setCoreBool:(BOOL)value forKey:(NSString *)key {
+    NSMutableDictionary *prefs = [NSMutableDictionary dictionaryWithContentsOfFile:kMiOSCorePlist] ?: [NSMutableDictionary dictionary];
+    prefs[key] = @(value);
+    [[NSFileManager defaultManager] createDirectoryAtPath:[kMiOSCorePlist stringByDeletingLastPathComponent]
+                              withIntermediateDirectories:YES attributes:nil error:nil];
+    [prefs writeToFile:kMiOSCorePlist atomically:YES];
+}
+
+- (void)buildExperimentalSection {
+    MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@"Experimental"];
+
+    MiOSToggleCell *fileCell = [[MiOSToggleCell alloc]
+        initWithTitle:@"File Isolation"
+             subtitle:@"Real per-container storage (may break some apps)"
+                 icon:@"folder.fill.badge.gearshape"
+                color:[UIColor systemTealColor]
+                  key:@"fileIsolation"];
+    fileCell.isOn = [self coreBoolForKey:@"fileIsolation"];
+    fileCell.delegate = self;
+    [section addCellView:fileCell];
+    [section addSeparator];
+
+    MiOSToggleCell *kcCell = [[MiOSToggleCell alloc]
+        initWithTitle:@"Keychain Isolation"
+             subtitle:@"Separate keychain per container"
+                 icon:@"key.fill"
+                color:[UIColor systemIndigoColor]
+                  key:@"keychainIsolation"];
+    kcCell.isOn = [self coreBoolForKey:@"keychainIsolation"];
+    kcCell.delegate = self;
+    [section addCellView:kcCell];
+    [section addSeparator];
+
+    MiOSToggleCell *prefCell = [[MiOSToggleCell alloc]
+        initWithTitle:@"Preferences Isolation"
+             subtitle:@"Separate NSUserDefaults per container"
+                 icon:@"slider.horizontal.3"
+                color:[UIColor systemPurpleColor]
+                  key:@"prefsIsolation"];
+    prefCell.isOn = [self coreBoolForKey:@"prefsIsolation"];
+    prefCell.delegate = self;
+    [section addCellView:prefCell];
+
+    [_mainStack addArrangedSubview:section];
+}
+
+- (void)toggleCell:(id)cell didChangeValue:(BOOL)value forKey:(NSString *)key {
+    [self setCoreBool:value forKey:key];
+    // Changes take effect the next time each container app is launched.
 }
 
 - (void)buildAboutSection {

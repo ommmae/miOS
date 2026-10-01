@@ -6,6 +6,7 @@
 #import <dlfcn.h>
 #import <sys/sysctl.h>
 #import "MiOSContainerManager.h"
+#import "MiOSContainerMint.h"
 
 // MARK: - Private declarations
 
@@ -481,7 +482,9 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
         // 1. Redirect the whole home directory into the container (the Crane/LiveContainer core).
         //    Data lives inside the app's OWN data container, so the sandbox always allows it.
         if (fileIsolation && containerEnabled && uuid) {
-            NSString *home = [mgr homePathForBundleID:gBundleID ensureCreated:YES];
+            // Mint / reuse a REAL OS data container (stock-like), not a subfolder. A subfolder is
+            // not a genuine container and triggers the mach-port/data-protection guard crash.
+            NSString *home = [MiOSContainerMint realHomeForBundle:gBundleID logicalID:uuid];
             // Probe that we can actually write there before committing; otherwise leave the app alone.
             BOOL writable = NO;
             if (home.length > 0) {
