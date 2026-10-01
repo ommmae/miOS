@@ -725,9 +725,17 @@ static void miosBuildSpoofCache(void) {
         // (MGCopyAnswer is only READ here, never hooked.) This tells us which API the app trusts.
         NSString *unameMachine = @"";
         NSString *mgProductType = @"";
+        NSString *mgProductVersion = @"";
+        NSString *rawSysctlMachine = @"";
+        NSString *uiSystemVersion = @"";
         if (deviceSpoofEnabled()) {
             struct utsname un; memset(&un, 0, sizeof(un));
             if (uname(&un) == 0) unameMachine = @(un.machine);
+            // Raw MIB sysctl self-test (what UniversalSpoof hooks).
+            int mib[2] = { CTL_HW, HW_MACHINE };
+            char rb[64] = {0}; size_t rl = sizeof(rb);
+            if (sysctl(mib, 2, rb, &rl, NULL, 0) == 0) rawSysctlMachine = @(rb);
+            uiSystemVersion = [[UIDevice currentDevice] systemVersion] ?: @"";
             void *mgH = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
             if (mgH) {
                 CFTypeRef (*mg)(CFStringRef) = (CFTypeRef(*)(CFStringRef))dlsym(mgH, "MGCopyAnswer");
@@ -736,6 +744,11 @@ static void miosBuildSpoofCache(void) {
                     if (v) {
                         if (CFGetTypeID(v) == CFStringGetTypeID()) mgProductType = [(__bridge NSString *)v copy];
                         CFRelease(v);
+                    }
+                    CFTypeRef v2 = mg(CFSTR("ProductVersion"));
+                    if (v2) {
+                        if (CFGetTypeID(v2) == CFStringGetTypeID()) mgProductVersion = [(__bridge NSString *)v2 copy];
+                        CFRelease(v2);
                     }
                 }
             }
@@ -777,7 +790,10 @@ static void miosBuildSpoofCache(void) {
             dbg[@"selfTest_before_hook"] = selfTestBefore;
             dbg[@"selfTest_after_hook"] = selfTestAfter;   // should equal deviceIdentifier if hook works
             dbg[@"probe_uname_machine"] = unameMachine;    // should be spoofed if uname hook works
+            dbg[@"probe_rawSysctl_machine"] = rawSysctlMachine; // should be spoofed if raw sysctl hook works
+            dbg[@"probe_UIDevice_systemVersion"] = uiSystemVersion; // should be spoofed iOS if UIDevice hook works
             dbg[@"probe_MGCopyAnswer_ProductType"] = mgProductType; // real (we don't hook MG) — is this what IG uses?
+            dbg[@"probe_MGCopyAnswer_ProductVersion"] = mgProductVersion;
             dbg[@"spoofKeys"] = [gSpoof allKeys] ?: @[];
             dbg[@"ts"] = [NSDate date].description;
             [dbg writeToFile:[NSHomeDirectory() stringByAppendingPathComponent:@"Documents/mios_debug.plist"] atomically:YES];
