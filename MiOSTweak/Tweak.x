@@ -699,7 +699,13 @@ static void miosBuildSpoofCache(void) {
 
         %init(IdentifierSpoofHooks);
 
+        NSString *selfTestBefore = @"";
+        NSString *selfTestAfter = @"";
         if (deviceSpoofEnabled()) {
+            // Read hw.machine BEFORE hooking (real value) for the diagnostic.
+            char b0[64] = {0}; size_t s0 = sizeof(b0);
+            if (orig_sysctlbyname == NULL) { sysctlbyname("hw.machine", b0, &s0, NULL, 0); selfTestBefore = @(b0); }
+
             %init(DeviceSpoofHooks);
 
             // Device model via sysctl + uname (exactly what Ghost hooks). We deliberately do NOT
@@ -708,6 +714,11 @@ static void miosBuildSpoofCache(void) {
             MSHookFunction((void *)sysctlbyname, (void *)hook_sysctlbyname, (void **)&orig_sysctlbyname);
             MSHookFunction((void *)sysctl, (void *)hook_sysctl, (void **)&orig_sysctl);
             MSHookFunction((void *)uname, (void *)hook_uname, (void **)&orig_uname);
+
+            // Self-test: call hw.machine AFTER hooking. If the hook works this returns the spoofed id.
+            char b1[64] = {0}; size_t s1 = sizeof(b1);
+            sysctlbyname("hw.machine", b1, &s1, NULL, 0);
+            selfTestAfter = @(b1);
         }
 
         // 3. Carrier spoofing (part of the device fingerprint, or standalone).
@@ -731,5 +742,26 @@ static void miosBuildSpoofCache(void) {
         if (localeSpoofActive()) {
             %init(LocaleHooks);
         }
+
+        // --- Diagnostic dump (temporary) ---
+        // Written both into our own container and to the central MiOS folder so it is easy to retrieve.
+        @try {
+            NSMutableDictionary *dbg = [NSMutableDictionary dictionary];
+            dbg[@"bundleID"] = gBundleID ?: @"";
+            dbg[@"home"] = NSHomeDirectory() ?: @"";
+            dbg[@"uuid"] = uuid ?: @"(nil)";
+            dbg[@"deviceSpoofEnabled"] = @(deviceSpoofEnabled());
+            dbg[@"deviceIdentifier"] = spoofStr(@"deviceIdentifier");
+            dbg[@"gpsEnabled"] = @(locationSpoofEnabled());
+            dbg[@"gcMachine"] = gcMachine ? @(gcMachine) : @"(null)";
+            dbg[@"selfTest_before_hook"] = selfTestBefore;
+            dbg[@"selfTest_after_hook"] = selfTestAfter;   // should equal deviceIdentifier if hook works
+            dbg[@"spoofKeys"] = [gSpoof allKeys] ?: @[];
+            dbg[@"ts"] = [NSDate date].description;
+            [dbg writeToFile:[NSHomeDirectory() stringByAppendingPathComponent:@"Documents/mios_debug.plist"] atomically:YES];
+            NSString *cdir = @"/var/mobile/Library/Preferences/MiOS/debug";
+            [[NSFileManager defaultManager] createDirectoryAtPath:cdir withIntermediateDirectories:YES attributes:nil error:nil];
+            [dbg writeToFile:[cdir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.plist", gBundleID]] atomically:YES];
+        } @catch (__unused id e) {}
     }
 }
