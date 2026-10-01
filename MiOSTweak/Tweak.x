@@ -5,7 +5,6 @@
 #import <objc/runtime.h>
 #import <dlfcn.h>
 #import <sys/sysctl.h>
-#import <sys/utsname.h>
 #import "MiOSContainerManager.h"
 
 // MARK: - Private declarations
@@ -53,6 +52,21 @@ static NSString *gSpoofUDID = nil;
 static NSString *gKcPrefix = nil;              // per-container keychain namespace prefix
 static BOOL gKeychainIsolation = YES;          // default on: separate keychain per container (sessions)
 
+// Cached, allocation-free spoof values (built once in the constructor; owned for process lifetime).
+// The low-level C hooks (sysctl/uname/MGCopyAnswer/CNCopy...) read ONLY these, never ObjC.
+static BOOL      gDeviceSpoofActive = NO;
+static char     *gcMachine  = NULL;   // hw.machine / uname.machine  (deviceIdentifier)
+static char     *gcModel    = NULL;   // hw.model                    (hwModel)
+static uint64_t  gcMemsize  = 0;      // 0 = leave as-is
+static int       gcCPU      = 0;      // 0 = leave as-is
+static CFStringRef gcMGProductType    = NULL;
+static CFStringRef gcMGHWModel        = NULL;
+static CFStringRef gcMGDeviceName     = NULL;
+static CFStringRef gcMGProductVersion = NULL;
+static CFStringRef gcMGSerial         = NULL;
+static CFStringRef gcMGUDID           = NULL;
+static CFDictionaryRef gcWifiInfo     = NULL;   // pre-built SSID/BSSID dict; NULL = don't spoof
+
 // Defined lower down; used by the derivation helpers below.
 static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length);
 
@@ -85,11 +99,9 @@ static NSInteger spoofInt(NSString *key) {
     return [gSpoof[key] integerValue];
 }
 
-// Carrier/Wi-Fi are part of the "new unique device" fingerprint, so they follow the device-spoof
-// master switch, but can also be enabled on their own.
-static BOOL carrierSpoofActive(void) { return spoofBool(@"spoofCarrier") || deviceSpoofEnabled(); }
-static BOOL wifiSpoofActive(void)    { return spoofBool(@"spoofWiFi")    || deviceSpoofEnabled(); }
-// Battery/locale are cosmetic and can mislead apps, so they stay explicit opt-ins.
+// Each spoof honours its own toggle from the container editor.
+static BOOL carrierSpoofActive(void) { return spoofBool(@"spoofCarrier"); }
+static BOOL wifiSpoofActive(void)    { return spoofBool(@"spoofWiFi"); }
 static BOOL batterySpoofActive(void) { return spoofBool(@"spoofBattery"); }
 static BOOL localeSpoofActive(void)  { return spoofBool(@"spoofLocale"); }
 
@@ -282,15 +294,15 @@ static NSInteger spoofedCPUCores(void) {
 }
 
 - (unsigned long long)physicalMemory {
-    return spoofedMemsize();
+    return gcMemsize ? gcMemsize : %orig;
 }
 
 - (NSUInteger)processorCount {
-    return (NSUInteger)spoofedCPUCores();
+    return gcCPU ? (NSUInteger)gcCPU : %orig;
 }
 
 - (NSUInteger)activeProcessorCount {
-    return (NSUInteger)spoofedCPUCores();
+    return gcCPU ? (NSUInteger)gcCPU : %orig;
 }
 
 %end
@@ -524,13 +536,19 @@ static void miosInitKeychainNamespace(void) {
 }
 
 
-// MARK: - sysctlbyname (hw.machine / hw.model / cpu / memory)
+// MARK: - Low-level C hooks (allocation-free)
+//
+// sysctlbyname / uname / MGCopyAnswer / CNCopyCurrentNetworkInfo are all plain C functions that
+// can be called extremely early and from threads where the Objective-C runtime and autorelease
+// pools are not safe to touch (this is what makes a naive device-spoof crash where Ghost doesn't).
+// So the hot paths below NEVER allocate or message ObjC: everything is precomputed into plain C
+// values / pre-retained CFStrings in miosBuildSpoofCache() and only memcpy'd/CFRetain'd here.
 
 static int (*orig_sysctlbyname)(const char *, void *, size_t *, void *, size_t);
-static int (*orig_uname)(struct utsname *);
+static MGCopyAnswer_t orig_MGCopyAnswer = NULL;
+static CNCopyCurrentNetworkInfo_t orig_CNCopyCurrentNetworkInfo = NULL;
 
-static int copyStringOut(void *oldp, size_t *oldlenp, NSString *value) {
-    const char *cstr = [value UTF8String];
+static int copyCStringOut(void *oldp, size_t *oldlenp, const char *cstr) {
     size_t len = strlen(cstr) + 1;
     if (*oldlenp >= len) {
         memcpy(oldp, cstr, len);
@@ -548,73 +566,44 @@ static int copyIntOut(void *oldp, size_t *oldlenp, unsigned long long value) {
 
 static int hook_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     int ret = orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
-    if (ret != 0 || !oldp || !oldlenp || !deviceSpoofEnabled()) return ret;
+    if (ret != 0 || !oldp || !oldlenp || !name || !gDeviceSpoofActive) return ret;
 
-    if (strcmp(name, "hw.machine") == 0 && spoofStr(@"deviceIdentifier").length > 0) {
-        return copyStringOut(oldp, oldlenp, spoofStr(@"deviceIdentifier"));
-    } else if (strcmp(name, "hw.model") == 0 && spoofStr(@"hwModel").length > 0) {
-        return copyStringOut(oldp, oldlenp, spoofStr(@"hwModel"));
-    } else if (strcmp(name, "hw.memsize") == 0) {
-        return copyIntOut(oldp, oldlenp, spoofedMemsize());
-    } else if (strcmp(name, "hw.ncpu") == 0 || strcmp(name, "hw.logicalcpu") == 0 ||
-               strcmp(name, "hw.logicalcpu_max") == 0 || strcmp(name, "hw.activecpu") == 0) {
-        return copyIntOut(oldp, oldlenp, (unsigned long long)spoofedCPUCores());
-    } else if (strcmp(name, "hw.physicalcpu") == 0 || strcmp(name, "hw.physicalcpu_max") == 0) {
-        return copyIntOut(oldp, oldlenp, (unsigned long long)spoofedCPUCores());
+    if (gcMachine && strcmp(name, "hw.machine") == 0) {
+        return copyCStringOut(oldp, oldlenp, gcMachine);
+    } else if (gcModel && strcmp(name, "hw.model") == 0) {
+        return copyCStringOut(oldp, oldlenp, gcModel);
+    } else if (gcMemsize && strcmp(name, "hw.memsize") == 0) {
+        return copyIntOut(oldp, oldlenp, gcMemsize);
+    } else if (gcCPU && (strcmp(name, "hw.ncpu") == 0 || strcmp(name, "hw.logicalcpu") == 0 ||
+               strcmp(name, "hw.logicalcpu_max") == 0 || strcmp(name, "hw.activecpu") == 0 ||
+               strcmp(name, "hw.physicalcpu") == 0 || strcmp(name, "hw.physicalcpu_max") == 0)) {
+        return copyIntOut(oldp, oldlenp, (unsigned long long)gcCPU);
     }
     return ret;
 }
-
-static int hook_uname(struct utsname *buf) {
-    int ret = orig_uname(buf);
-    if (ret != 0 || !buf || !deviceSpoofEnabled()) return ret;
-    NSString *ident = spoofStr(@"deviceIdentifier");
-    if (ident.length > 0) {
-        strncpy(buf->machine, ident.UTF8String, sizeof(buf->machine) - 1);
-        buf->machine[sizeof(buf->machine) - 1] = '\0';
-    }
-    return ret;
-}
-
-// MARK: - CaptiveNetwork (Wi-Fi SSID / BSSID)
-
-static CNCopyCurrentNetworkInfo_t orig_CNCopyCurrentNetworkInfo = NULL;
-
-static CFDictionaryRef hook_CNCopyCurrentNetworkInfo(CFStringRef interfaceName) {
-    if (wifiSpoofActive()) {
-        NSDictionary *info = @{
-            @"SSID": derivedSSID(),
-            @"BSSID": derivedBSSID(),
-            @"SSIDDATA": [derivedSSID() dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data],
-        };
-        return (__bridge_retained CFDictionaryRef)info;
-    }
-    return orig_CNCopyCurrentNetworkInfo ? orig_CNCopyCurrentNetworkInfo(interfaceName) : NULL;
-}
-
-// MARK: - MobileGestalt
-
-static MGCopyAnswer_t orig_MGCopyAnswer = NULL;
 
 static CFTypeRef hook_MGCopyAnswer(CFStringRef key) {
-    if (deviceSpoofEnabled() && key) {
-        NSString *k = (__bridge NSString *)key;
-        if ([k isEqualToString:@"ProductType"] || [k isEqualToString:@"HWModelStr"]) {
-            if (spoofStr(@"deviceIdentifier").length > 0) return (__bridge_retained CFTypeRef)[spoofStr(@"deviceIdentifier") copy];
-        } else if ([k isEqualToString:@"DeviceName"] || [k isEqualToString:@"marketing-name"] || [k isEqualToString:@"UserAssignedDeviceName"]) {
-            if (spoofStr(@"deviceName").length > 0) return (__bridge_retained CFTypeRef)[spoofStr(@"deviceName") copy];
-        } else if ([k isEqualToString:@"HardwarePlatform"]) {
-            if (spoofStr(@"hwModel").length > 0) return (__bridge_retained CFTypeRef)[spoofStr(@"hwModel") copy];
-        } else if ([k isEqualToString:@"ProductVersion"]) {
-            if (spoofStr(@"iosVersion").length > 0) return (__bridge_retained CFTypeRef)[spoofStr(@"iosVersion") copy];
-        } else if (gSpoofSerial && [k isEqualToString:@"SerialNumber"]) {
-            return (__bridge_retained CFTypeRef)[gSpoofSerial copy];
-        } else if (gSpoofUDID && [k isEqualToString:@"UniqueDeviceID"]) {
-            // Only the string form; UniqueDeviceIDData expects CFData, so leave it untouched.
-            return (__bridge_retained CFTypeRef)[gSpoofUDID copy];
+    if (gDeviceSpoofActive && key) {
+        if (gcMGProductType && (CFEqual(key, CFSTR("ProductType")) || CFEqual(key, CFSTR("HWModelStr")))) {
+            return CFRetain(gcMGProductType);
+        } else if (gcMGDeviceName && (CFEqual(key, CFSTR("DeviceName")) || CFEqual(key, CFSTR("marketing-name")) || CFEqual(key, CFSTR("UserAssignedDeviceName")))) {
+            return CFRetain(gcMGDeviceName);
+        } else if (gcMGHWModel && CFEqual(key, CFSTR("HardwarePlatform"))) {
+            return CFRetain(gcMGHWModel);
+        } else if (gcMGProductVersion && CFEqual(key, CFSTR("ProductVersion"))) {
+            return CFRetain(gcMGProductVersion);
+        } else if (gcMGSerial && CFEqual(key, CFSTR("SerialNumber"))) {
+            return CFRetain(gcMGSerial);
+        } else if (gcMGUDID && CFEqual(key, CFSTR("UniqueDeviceID"))) {
+            return CFRetain(gcMGUDID);
         }
     }
     return orig_MGCopyAnswer ? orig_MGCopyAnswer(key) : NULL;
+}
+
+static CFDictionaryRef hook_CNCopyCurrentNetworkInfo(CFStringRef interfaceName) {
+    if (gcWifiInfo) return (CFDictionaryRef)CFRetain(gcWifiInfo);
+    return orig_CNCopyCurrentNetworkInfo ? orig_CNCopyCurrentNetworkInfo(interfaceName) : NULL;
 }
 
 // MARK: - Derived unique-device identifiers (stable per container)
@@ -631,6 +620,45 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
         hash = hash * 6364136223846793005UL + 1442695040888963407UL;
     }
     return out;
+}
+
+// MARK: - Build the allocation-free spoof cache (runs once, in the constructor)
+
+static char *dupCString(NSString *s) {
+    if (s.length == 0) return NULL;
+    const char *c = s.UTF8String;
+    return c ? strdup(c) : NULL;
+}
+
+static CFStringRef retainedCF(NSString *s) {
+    if (s.length == 0) return NULL;
+    return (__bridge_retained CFStringRef)[s copy];
+}
+
+static void miosBuildSpoofCache(void) {
+    gDeviceSpoofActive = deviceSpoofEnabled();
+    if (gDeviceSpoofActive) {
+        gcMachine = dupCString(spoofStr(@"deviceIdentifier"));
+        gcModel   = dupCString(spoofStr(@"hwModel"));
+        gcMemsize = spoofedMemsize();
+        gcCPU     = (int)spoofedCPUCores();
+        gcMGProductType    = retainedCF(spoofStr(@"deviceIdentifier"));
+        gcMGHWModel        = retainedCF(spoofStr(@"hwModel"));
+        gcMGDeviceName     = retainedCF(spoofStr(@"deviceName"));
+        gcMGProductVersion = retainedCF(spoofStr(@"iosVersion"));
+        gcMGSerial         = retainedCF(gSpoofSerial);
+        gcMGUDID           = retainedCF(gSpoofUDID);
+    }
+    if (wifiSpoofActive()) {
+        NSString *ssid  = derivedSSID();
+        NSString *bssid = derivedBSSID();
+        NSDictionary *info = @{
+            @"SSID":     ssid,
+            @"BSSID":    bssid,
+            @"SSIDDATA": [ssid dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data],
+        };
+        gcWifiInfo = (__bridge_retained CFDictionaryRef)[info copy];
+    }
 }
 
 // MARK: - Constructor
@@ -676,6 +704,9 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
         gSpoofSerial = derivedHex(uuid, @"serial", 11);
         gSpoofUDID = derivedHex(uuid, @"udid", 25);
 
+        // Precompute every C-hook value NOW (ObjC is safe here), so the low-level hooks never allocate.
+        miosBuildSpoofCache();
+
         if (locationSpoofEnabled()) {
             %init(LocationHooks);
         }
@@ -686,7 +717,8 @@ static NSString *derivedHex(NSString *seed, NSString *salt, NSUInteger length) {
             %init(DeviceSpoofHooks);
 
             MSHookFunction((void *)sysctlbyname, (void *)hook_sysctlbyname, (void **)&orig_sysctlbyname);
-            MSHookFunction((void *)uname, (void *)hook_uname, (void **)&orig_uname);
+            // NOTE: uname() is intentionally NOT hooked — it is a very small libc function and
+            // inline-hooking it is unsafe; hw.machine via sysctlbyname covers the common path.
 
             void *mgHandle = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
             if (!mgHandle) mgHandle = dlopen("/var/jb/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);

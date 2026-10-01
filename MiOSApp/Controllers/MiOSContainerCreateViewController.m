@@ -185,6 +185,12 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
 @property (nonatomic, strong) UILabel *advertisingIDLabel;
 @property (nonatomic, assign) BOOL spoofCloudToken;
 
+// Network & sensor spoofing (values are derived per-container automatically)
+@property (nonatomic, assign) BOOL spoofCarrier;
+@property (nonatomic, assign) BOOL spoofWiFi;
+@property (nonatomic, assign) BOOL spoofBattery;
+@property (nonatomic, assign) BOOL spoofLocale;
+
 @end
 
 @implementation MiOSContainerCreateViewController
@@ -270,6 +276,10 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
     _spoofAdvertisingID = _editingContainer.spoofAdvertisingID;
     _advertisingID = _editingContainer.advertisingID.length > 0 ? _editingContainer.advertisingID : nil;
     _spoofCloudToken = _editingContainer.spoofCloudToken;
+    _spoofCarrier = _editingContainer.spoofCarrier;
+    _spoofWiFi = _editingContainer.spoofWiFi;
+    _spoofBattery = _editingContainer.spoofBattery;
+    _spoofLocale = _editingContainer.spoofLocale;
 
     if (_editingContainer.deviceIdentifier.length > 0) {
         for (NSInteger i = 0; i < (NSInteger)_deviceList.count; i++) {
@@ -672,6 +682,7 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
     [self buildGPSSection];
     [self buildIdentifiersSection];
     [self buildDeviceSection];
+    [self buildNetworkSpoofSection];
     [self buildSaveButton];
 }
 
@@ -757,6 +768,11 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
     _spoofAdvertisingID = YES;
     _advertisingID = [[NSUUID UUID] UUIDString];
     _spoofCloudToken = YES;
+
+    _spoofCarrier = YES;
+    _spoofWiFi = YES;
+    _spoofBattery = NO;
+    _spoofLocale = NO;
 
     [self buildStep2Content];
 
@@ -1298,6 +1314,51 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
     _customDeviceNameText = field.text;
 }
 
+- (void)buildNetworkSpoofSection {
+    MiOSSectionCardView *section = [[MiOSSectionCardView alloc] initWithTitle:@"Network & Sensors"];
+
+    MiOSToggleCell *carrierToggle = [[MiOSToggleCell alloc] initWithTitle:@"Carrier Spoof"
+                                                                 subtitle:@"Fake carrier name, MCC/MNC & country"
+                                                                     icon:@"antenna.radiowaves.left.and.right"
+                                                                    color:[UIColor systemGreenColor]
+                                                                      key:@"spoofCarrier"];
+    carrierToggle.isOn = _spoofCarrier;
+    carrierToggle.delegate = self;
+    [section addCellView:carrierToggle];
+    [section addSeparator];
+
+    MiOSToggleCell *wifiToggle = [[MiOSToggleCell alloc] initWithTitle:@"Wi-Fi Spoof"
+                                                             subtitle:@"Fake SSID & BSSID for this container"
+                                                                 icon:@"wifi"
+                                                                color:[UIColor systemBlueColor]
+                                                                  key:@"spoofWiFi"];
+    wifiToggle.isOn = _spoofWiFi;
+    wifiToggle.delegate = self;
+    [section addCellView:wifiToggle];
+    [section addSeparator];
+
+    MiOSToggleCell *batteryToggle = [[MiOSToggleCell alloc] initWithTitle:@"Battery Spoof"
+                                                                 subtitle:@"Report a fixed battery level & state"
+                                                                     icon:@"battery.100"
+                                                                    color:[UIColor systemYellowColor]
+                                                                      key:@"spoofBattery"];
+    batteryToggle.isOn = _spoofBattery;
+    batteryToggle.delegate = self;
+    [section addCellView:batteryToggle];
+    [section addSeparator];
+
+    MiOSToggleCell *localeToggle = [[MiOSToggleCell alloc] initWithTitle:@"Time Zone Spoof"
+                                                                subtitle:@"Override reported system time zone"
+                                                                    icon:@"globe"
+                                                                   color:[UIColor systemIndigoColor]
+                                                                     key:@"spoofLocale"];
+    localeToggle.isOn = _spoofLocale;
+    localeToggle.delegate = self;
+    [section addCellView:localeToggle];
+
+    [_step2Stack addArrangedSubview:section];
+}
+
 - (void)updateDeviceCardUIAnimated:(BOOL)animated {
     if (_selectedDeviceIndex >= (NSInteger)_deviceList.count) return;
     MiOSDeviceModel *device = _deviceList[_selectedDeviceIndex];
@@ -1473,6 +1534,11 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
     config.advertisingID = _advertisingID;
     config.spoofCloudToken = _spoofCloudToken;
 
+    config.spoofCarrier = _spoofCarrier;
+    config.spoofWiFi = _spoofWiFi;
+    config.spoofBattery = _spoofBattery;
+    config.spoofLocale = _spoofLocale;
+
     NSMutableArray<MiOSContainerConfig *> *all = [[MiOSContainerConfig loadAll] mutableCopy] ?: [NSMutableArray array];
     BOOL replaced = NO;
     for (NSUInteger i = 0; i < all.count; i++) {
@@ -1574,6 +1640,14 @@ static NSString *const kAppCellReuseID = @"MiOSAppRowCell";
         }
     } else if ([key isEqualToString:@"spoofCloudToken"]) {
         _spoofCloudToken = value;
+    } else if ([key isEqualToString:@"spoofCarrier"]) {
+        _spoofCarrier = value;
+    } else if ([key isEqualToString:@"spoofWiFi"]) {
+        _spoofWiFi = value;
+    } else if ([key isEqualToString:@"spoofBattery"]) {
+        _spoofBattery = value;
+    } else if ([key isEqualToString:@"spoofLocale"]) {
+        _spoofLocale = value;
     }
 }
 
