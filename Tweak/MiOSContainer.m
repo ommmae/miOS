@@ -2,8 +2,18 @@
 #import "MiOSDeviceDB.h"
 #import "MiOSCrypt.h"
 
+static NSString *gMiOSRealHome = nil;
+
+NSString *MiOSRealHome(void) {
+    return gMiOSRealHome ?: NSHomeDirectory();
+}
+
+void MiOSSetRealHome(NSString *path) {
+    gMiOSRealHome = [path copy];
+}
+
 NSString *MiOSBaseDir(void) {
-    NSString *dir = [[NSHomeDirectory() stringByAppendingPathComponent:@"Documents"]
+    NSString *dir = [[MiOSRealHome() stringByAppendingPathComponent:@"Documents"]
                      stringByAppendingPathComponent:@"miOS"];
     [[NSFileManager defaultManager] createDirectoryAtPath:dir
                               withIntermediateDirectories:YES attributes:nil error:nil];
@@ -92,6 +102,9 @@ static NSString *kConfigPath(void) { return [MiOSBaseDir() stringByAppendingPath
     if (!removed) return;
     [all removeObject:removed];
     [self saveAll:all];
+    NSString *cRoot = [[MiOSBaseDir() stringByAppendingPathComponent:@"c"]
+                        stringByAppendingPathComponent:containerID];
+    [[NSFileManager defaultManager] removeItemAtPath:cRoot error:nil];
     if ([[self activeContainerID] isEqualToString:containerID]) {
         MiOSContainer *next = all.firstObject;
         [self setActiveContainerID:next.identifier];
@@ -102,6 +115,26 @@ static NSString *kConfigPath(void) { return [MiOSBaseDir() stringByAppendingPath
     NSFileManager *fm = [NSFileManager defaultManager];
     [fm removeItemAtPath:kListPath() error:nil];
     [fm removeItemAtPath:kConfigPath() error:nil];
+    [fm removeItemAtPath:[MiOSBaseDir() stringByAppendingPathComponent:@"c"] error:nil];
+}
+
+#pragma mark - Container root (filesystem isolation)
+
+- (NSString *)containerRoot {
+    return [[MiOSBaseDir() stringByAppendingPathComponent:@"c"]
+            stringByAppendingPathComponent:self.identifier];
+}
+
+- (NSString *)containerRootEnsureCreated:(BOOL)create {
+    NSString *root = [self containerRoot];
+    if (!create) return root;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *sub in @[@"Documents", @"Library", @"Library/Caches",
+                            @"Library/Preferences", @"tmp"]) {
+        [fm createDirectoryAtPath:[root stringByAppendingPathComponent:sub]
+      withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+    return root;
 }
 
 #pragma mark - Runtime

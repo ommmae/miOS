@@ -337,6 +337,7 @@ static UIImpactFeedbackGenerator *MiOSHaptic(void) {
         message:@"Activate this container? Instagram will restart to apply it." preferredStyle:UIAlertControllerStyleActionSheet];
     [a addAction:[UIAlertAction actionWithTitle:@"Activate & restart" style:UIAlertActionStyleDefault
         handler:^(UIAlertAction *x){
+            [m containerRootEnsureCreated:YES];
             [MiOSContainer setActiveContainerID:m.identifier];
             exit(0);
         }]];

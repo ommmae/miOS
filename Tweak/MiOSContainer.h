@@ -7,6 +7,8 @@
 // optionally encrypted on disk (see MiOSCrypt).
 
 FOUNDATION_EXPORT NSString *MiOSBaseDir(void);          // …/Documents/miOS
+FOUNDATION_EXPORT NSString *MiOSRealHome(void);          // original NSHomeDirectory before hooks
+FOUNDATION_EXPORT void MiOSSetRealHome(NSString *path);
 
 @interface MiOSContainer : NSObject
 
@@ -148,6 +150,9 @@ FOUNDATION_EXPORT NSString *MiOSBaseDir(void);          // …/Documents/miOS
 + (void)resetAll;   // wipe every container and settings — "Reset miOS"
 
 - (void)save;
+
+- (NSString *)containerRoot;
+- (NSString *)containerRootEnsureCreated:(BOOL)create;
 
 #pragma mark - Factory / randomizers
 

@@ -7,6 +7,7 @@
 #import <sys/utsname.h>
 #import <sys/socket.h>
 #import <sys/stat.h>
+#import <Security/Security.h>
 #import <arpa/inet.h>
 #import <ifaddrs.h>
 #import <net/if.h>
@@ -61,6 +62,9 @@ typedef CFDictionaryRef (*CNCopyCurrentNetworkInfo_t)(CFStringRef interfaceName)
 
 static NSDictionary *gSpoof = nil;
 static NSString *gContainerUUID = nil;
+static NSString *gContainerRoot = nil;
+static NSString *gContainerTmp = nil;
+static NSString *gKcPrefix = nil;
 
 
 // Cached, allocation-free spoof values
@@ -366,6 +370,16 @@ static CLLocation *spoofedLocationObject(void) {
     if (spoofBool(@"enableSpoofCloudToken")) return nil;
     return %orig;
 }
+- (NSURL *)containerURLForSecurityApplicationGroupIdentifier:(NSString *)groupID {
+    if (gContainerRoot && groupID.length) {
+        NSString *gDir = [[gContainerRoot stringByAppendingPathComponent:@"AppGroup"]
+                          stringByAppendingPathComponent:groupID];
+        [[NSFileManager defaultManager] createDirectoryAtPath:gDir
+                                  withIntermediateDirectories:YES attributes:nil error:nil];
+        return [NSURL fileURLWithPath:gDir isDirectory:YES];
+    }
+    return %orig;
+}
 %end
 // end IdentifierSpoofHooks
 
@@ -479,8 +493,88 @@ static FILE *hook_fopen(const char *p, const char *m) {
 %end
 // end DetectionHooks
 
-// (Keychain namespacing and filesystem isolation removed — Blaze model:
-//  containers are spoof-config sets, not filesystem sandboxes.)
+// MARK: - Filesystem isolation (CFFIXED_USER_HOME parity with Blaze)
+
+static NSString *(*orig_NSHomeDirectory)(void) = NULL;
+static NSString *hook_NSHomeDirectory(void) {
+    return gContainerRoot ?: orig_NSHomeDirectory();
+}
+
+static NSString *(*orig_NSTemporaryDirectory)(void) = NULL;
+static NSString *hook_NSTemporaryDirectory(void) {
+    return gContainerTmp ?: orig_NSTemporaryDirectory();
+}
+
+static NSArray *(*orig_NSSearchPathForDirectoriesInDomains)(NSSearchPathDirectory, NSSearchPathDomainMask, BOOL) = NULL;
+static NSArray *hook_NSSearchPathForDirectoriesInDomains(NSSearchPathDirectory dir, NSSearchPathDomainMask mask, BOOL expand) {
+    if (!gContainerRoot) return orig_NSSearchPathForDirectoriesInDomains(dir, mask, expand);
+    NSArray *orig = orig_NSSearchPathForDirectoriesInDomains(dir, mask, expand);
+    NSString *realHome = MiOSRealHome();
+    NSMutableArray *result = [NSMutableArray arrayWithCapacity:orig.count];
+    for (NSString *p in orig) {
+        if ([p hasPrefix:realHome]) {
+            NSString *suffix = [p substringFromIndex:realHome.length];
+            [result addObject:[gContainerRoot stringByAppendingString:suffix]];
+        } else {
+            [result addObject:p];
+        }
+    }
+    return result;
+}
+
+static CFURLRef (*orig_CFCopyHomeDirectoryURL)(void) = NULL;
+static CFURLRef hook_CFCopyHomeDirectoryURL(void) {
+    if (gContainerRoot) {
+        return CFURLCreateWithFileSystemPath(kCFAllocatorDefault,
+            (__bridge CFStringRef)gContainerRoot, kCFURLPOSIXPathStyle, true);
+    }
+    return orig_CFCopyHomeDirectoryURL();
+}
+
+// MARK: - Keychain isolation (Blaze ADMIN: prefix parity)
+
+static CFDictionaryRef miosKeychainAddPrefix(CFDictionaryRef query) {
+    if (!gKcPrefix || !query) return (CFDictionaryRef)CFRetain(query);
+    NSDictionary *d = (__bridge NSDictionary *)query;
+    NSString *svc = d[(__bridge id)kSecAttrService];
+    if (![svc isKindOfClass:[NSString class]] || svc.length == 0)
+        return (CFDictionaryRef)CFRetain(query);
+    NSMutableDictionary *m = [d mutableCopy];
+    m[(__bridge id)kSecAttrService] = [gKcPrefix stringByAppendingString:svc];
+    return (__bridge_retained CFDictionaryRef)m;
+}
+
+static OSStatus (*orig_SecItemAdd)(CFDictionaryRef, CFTypeRef *);
+static OSStatus hook_SecItemAdd(CFDictionaryRef attrs, CFTypeRef *result) {
+    CFDictionaryRef mod = miosKeychainAddPrefix(attrs);
+    OSStatus r = orig_SecItemAdd(mod, result);
+    CFRelease(mod);
+    return r;
+}
+
+static OSStatus (*orig_SecItemCopyMatching)(CFDictionaryRef, CFTypeRef *);
+static OSStatus hook_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result) {
+    CFDictionaryRef mod = miosKeychainAddPrefix(query);
+    OSStatus r = orig_SecItemCopyMatching(mod, result);
+    CFRelease(mod);
+    return r;
+}
+
+static OSStatus (*orig_SecItemUpdate)(CFDictionaryRef, CFDictionaryRef);
+static OSStatus hook_SecItemUpdate(CFDictionaryRef query, CFDictionaryRef attrsToUpdate) {
+    CFDictionaryRef mod = miosKeychainAddPrefix(query);
+    OSStatus r = orig_SecItemUpdate(mod, attrsToUpdate);
+    CFRelease(mod);
+    return r;
+}
+
+static OSStatus (*orig_SecItemDelete)(CFDictionaryRef);
+static OSStatus hook_SecItemDelete(CFDictionaryRef query) {
+    CFDictionaryRef mod = miosKeychainAddPrefix(query);
+    OSStatus r = orig_SecItemDelete(mod);
+    CFRelease(mod);
+    return r;
+}
 
 // MARK: - sysctl / uname / CNCopy… / getifaddrs (allocation-free)
 
@@ -664,8 +758,6 @@ static void miosBuildSpoofCache(void) {
     }
 }
 
-// (App Group wipe / Mach-O parser removed — Blaze does not wipe App Group state.)
-
 // MARK: - Constructor
 
 %ctor {
@@ -680,6 +772,7 @@ static void miosBuildSpoofCache(void) {
         if (!isInstagram) return;
 
         NSString *home = [NSHomeDirectory() copy];
+        MiOSSetRealHome(home);
 
         // Diagnostic marker — proves the dylib loaded.
         @try {
@@ -706,12 +799,40 @@ static void miosBuildSpoofCache(void) {
         gContainerUUID = [active.identifier copy];
         gSpoof = [[active spoofPrefs] copy];
 
-        // Blaze model: containers are spoof-config sets. No filesystem isolation,
-        // no keychain namespacing, no App Group wipes.
+        // Filesystem isolation: redirect to per-container root.
+        NSString *cRoot = [active containerRootEnsureCreated:YES];
+        gContainerRoot = [cRoot copy];
+        gContainerTmp = [[cRoot stringByAppendingPathComponent:@"tmp"] copy];
+
+        setenv("ORIGINAL_HOME_PATH", home.UTF8String, 1);
+        setenv("CFFIXED_USER_HOME", cRoot.UTF8String, 1);
+        setenv("HOME", cRoot.UTF8String, 1);
+        setenv("TMPDIR", gContainerTmp.UTF8String, 1);
+
+        // Keychain prefix (Blaze ADMIN: parity)
+        gKcPrefix = [NSString stringWithFormat:@"ADMIN:%@_", gContainerUUID];
 
         // Build allocation-free spoof cache + install Logos hooks.
         miosBuildSpoofCache();
         %init;
+
+        // FS isolation hooks
+        MSHookFunction((void *)NSHomeDirectory, (void *)hook_NSHomeDirectory, (void **)&orig_NSHomeDirectory);
+        MSHookFunction((void *)NSTemporaryDirectory, (void *)hook_NSTemporaryDirectory, (void **)&orig_NSTemporaryDirectory);
+        MSHookFunction((void *)NSSearchPathForDirectoriesInDomains,
+                        (void *)hook_NSSearchPathForDirectoriesInDomains,
+                        (void **)&orig_NSSearchPathForDirectoriesInDomains);
+        void *cfFW = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_LAZY);
+        if (cfFW) {
+            CFURLRef (*cfHomeFn)(void) = (CFURLRef(*)(void))dlsym(cfFW, "CFCopyHomeDirectoryURL");
+            if (cfHomeFn) MSHookFunction((void *)cfHomeFn, (void *)hook_CFCopyHomeDirectoryURL, (void **)&orig_CFCopyHomeDirectoryURL);
+        }
+
+        // Keychain isolation hooks
+        MSHookFunction((void *)SecItemAdd, (void *)hook_SecItemAdd, (void **)&orig_SecItemAdd);
+        MSHookFunction((void *)SecItemCopyMatching, (void *)hook_SecItemCopyMatching, (void **)&orig_SecItemCopyMatching);
+        MSHookFunction((void *)SecItemUpdate, (void *)hook_SecItemUpdate, (void **)&orig_SecItemUpdate);
+        MSHookFunction((void *)SecItemDelete, (void *)hook_SecItemDelete, (void **)&orig_SecItemDelete);
 
         // Low-level C hooks.
         if (gDeviceSpoofActive) {
@@ -750,6 +871,8 @@ static void miosBuildSpoofCache(void) {
             NSMutableDictionary *dump = [NSMutableDictionary dictionary];
             dump[@"containerID"] = gContainerUUID ?: @"";
             dump[@"containerName"] = active.name ?: @"";
+            dump[@"containerRoot"] = gContainerRoot ?: @"";
+            dump[@"keychainPrefix"] = gKcPrefix ?: @"";
             dump[@"timestamp"] = [NSDate date].description;
             dump[@"deviceSpoofActive"] = @(gDeviceSpoofActive);
             dump[@"gcMachine"] = gcMachine ? @(gcMachine) : @"(none)";
