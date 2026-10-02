@@ -1,23 +1,44 @@
 #import <UIKit/UIKit.h>
 
-// Shared visual language — colors, fonts, SF-symbol helpers, rounded cards.
 @interface MiOSTheme : NSObject
-+ (UIColor *)accent;              // signature cyan-blue accent
-+ (UIColor *)accentSecondary;     // violet highlight for Spoof mode
+
++ (UIColor *)accent;
++ (UIColor *)accentGradientEnd;
++ (UIColor *)accentBorder;
 + (UIColor *)background;
-+ (UIColor *)card;
-+ (UIColor *)cardElevated;
++ (UIColor *)secondaryBackground;
++ (UIColor *)cardBackground;
++ (UIColor *)cardBorder;
++ (UIColor *)tileBackground;
++ (UIColor *)glassBackground;
 + (UIColor *)separator;
 + (UIColor *)text;
 + (UIColor *)textSecondary;
++ (UIColor *)textOnAccent;
 + (UIColor *)destructive;
++ (UIColor *)statusGreen;
++ (UIColor *)statusYellow;
++ (UIColor *)statusGray;
 
++ (UIFont *)largeTitleFont;
 + (UIFont *)titleFont;
-+ (UIFont *)headerFont;
++ (UIFont *)headline;
 + (UIFont *)bodyFont;
++ (UIFont *)subhead;
 + (UIFont *)captionFont;
++ (UIFont *)captionBold;
+
++ (CGFloat)cardCornerRadius;
++ (CGFloat)tileCornerRadius;
++ (CGFloat)cardPadding;
 
 + (UIImage *)symbol:(NSString *)name size:(CGFloat)size;
 + (UIImage *)symbol:(NSString *)name size:(CGFloat)size color:(UIColor *)color;
++ (UIView *)iconBubbleWithSymbol:(NSString *)name color:(UIColor *)color size:(CGFloat)size;
+
 + (void)applyCardStyleTo:(UIView *)view;
++ (void)applyGlassStyleTo:(UIView *)view;
++ (CAGradientLayer *)accentGradientForBounds:(CGRect)bounds;
++ (CAGradientLayer *)backgroundGradientForBounds:(CGRect)bounds;
+
 @end
