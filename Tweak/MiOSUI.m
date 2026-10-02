@@ -8,8 +8,22 @@
 #pragma mark - Helpers
 
 static UIWindow *MiOSKeyWindow(void) {
-    for (UIWindow *w in UIApplication.sharedApplication.windows) if (w.isKeyWindow) return w;
-    return UIApplication.sharedApplication.windows.lastObject;
+    // Scene-aware: iOS 13+ keeps windows on UIWindowScene, not UIApplication.
+    UIApplication *app = UIApplication.sharedApplication;
+    if ([app respondsToSelector:@selector(connectedScenes)]) {
+        for (UIScene *s in app.connectedScenes) {
+            if (![s isKindOfClass:[UIWindowScene class]]) continue;
+            if (s.activationState == UISceneActivationStateUnattached) continue;
+            for (UIWindow *w in ((UIWindowScene *)s).windows) if (w.isKeyWindow) return w;
+        }
+        for (UIScene *s in app.connectedScenes) {
+            if (![s isKindOfClass:[UIWindowScene class]]) continue;
+            UIWindowScene *ws = (UIWindowScene *)s;
+            if (ws.windows.count) return ws.windows.lastObject;
+        }
+    }
+    for (UIWindow *w in app.windows) if (w.isKeyWindow) return w;
+    return app.windows.lastObject;
 }
 static UIViewController *MiOSTopVC(void) {
     UIViewController *vc = MiOSKeyWindow().rootViewController;
@@ -1166,18 +1180,31 @@ static BOOL gInstalled = NO;
     }
 }
 
-+ (UIWindow *)bestHostWindow {
-    // Prefer the key window; fall back to the frontmost visible window that is NOT a known
-    // overlay class (keyboard, status bar). Covers the UIScene case where no window is 'key'
-    // yet but one is already on-screen.
++ (NSArray<UIWindow *> *)allWindows {
+    // On iOS 13+, UIApplication.windows is deprecated and can be empty — windows live on
+    // UIWindowScene instances instead. Walk every connected foreground-active scene.
+    NSMutableArray<UIWindow *> *out = [NSMutableArray array];
     UIApplication *app = UIApplication.sharedApplication;
-    UIWindow *key = nil;
-    for (UIWindow *w in app.windows) if (w.isKeyWindow) { key = w; break; }
-    if (key) return key;
-    for (UIWindow *w in [app.windows reverseObjectEnumerator]) {
+    if ([app respondsToSelector:@selector(connectedScenes)]) {
+        for (UIScene *scene in app.connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            if (scene.activationState == UISceneActivationStateUnattached) continue;
+            UIWindowScene *ws = (UIWindowScene *)scene;
+            for (UIWindow *w in ws.windows) if (w) [out addObject:w];
+        }
+    }
+    // Fallback — some sandboxed signers hide connectedScenes behind entitlements.
+    for (UIWindow *w in app.windows) if (w && ![out containsObject:w]) [out addObject:w];
+    return out;
+}
+
++ (UIWindow *)bestHostWindow {
+    NSArray<UIWindow *> *wins = [self allWindows];
+    for (UIWindow *w in wins) if (w.isKeyWindow) return w;
+    for (UIWindow *w in [wins reverseObjectEnumerator]) {
         if (!w.hidden && w.alpha > 0 && w.bounds.size.width > 100) return w;
     }
-    return app.windows.lastObject;
+    return wins.lastObject;
 }
 
 + (void)attachButton {

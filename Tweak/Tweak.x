@@ -909,18 +909,25 @@ static void miosResetContainerCachesOnce(NSString *uuid) {
         MiOSSetRealHome(gRealHome);
         setenv("MIOS_REAL_HOME", gRealHome.UTF8String, 1);
 
-        // Diagnostic: a 'did I load?' marker inside the app's own Documents, overwritten each
-        // launch. If this file is missing after you open Instagram, dyld didn't load the dylib
-        // (signing stripped it, LC_LOAD_DYLIB wasn't injected, or ldid signature was invalid).
+        // Diagnostic: a 'did I load?' marker overwritten each launch. If none of these files
+        // exist after you open Instagram, dyld didn't load the dylib (signing stripped it,
+        // LC_LOAD_DYLIB wasn't injected, or ldid signature was invalid).
         @try {
-            NSString *diagPath = [[gRealHome stringByAppendingPathComponent:@"Documents"]
-                                  stringByAppendingPathComponent:@"mios-loaded.txt"];
             NSString *diag = [NSString stringWithFormat:
-                @"miOS loaded at %@\nbundleID=%@\nexecutable=%@\nhome=%@\n",
-                [NSDate date], bundleID, exeName, gRealHome];
-            [[NSFileManager defaultManager] createDirectoryAtPath:[diagPath stringByDeletingLastPathComponent]
-                                      withIntermediateDirectories:YES attributes:nil error:nil];
-            [diag writeToFile:diagPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                @"miOS loaded at %@\nbundleID=%@\nexecutable=%@\nhome=%@\ntmp=%@\n",
+                [NSDate date], bundleID, exeName, gRealHome, NSTemporaryDirectory()];
+            NSArray<NSString *> *paths = @[
+                [[gRealHome stringByAppendingPathComponent:@"Documents"]
+                    stringByAppendingPathComponent:@"mios-loaded.txt"],
+                [NSTemporaryDirectory() stringByAppendingPathComponent:@"mios-loaded.txt"],
+                [[gRealHome stringByAppendingPathComponent:@"Library/Caches"]
+                    stringByAppendingPathComponent:@"mios-loaded.txt"],
+            ];
+            for (NSString *path in paths) {
+                [[NSFileManager defaultManager] createDirectoryAtPath:[path stringByDeletingLastPathComponent]
+                                          withIntermediateDirectories:YES attributes:nil error:nil];
+                [diag writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            }
         } @catch (__unused id e) {}
 
         [MiOSUI install];   // floating button is always available

@@ -23,4 +23,10 @@ miOS_FRAMEWORKS = Foundation CoreFoundation UIKit CoreLocation MapKit \
                   QuartzCore MessageUI
 miOS_PRIVATE_FRAMEWORKS =
 
+# Bake the sideloaded-IPA install path into LC_ID_DYLIB so it matches the LC_LOAD_DYLIB
+# the patcher inserts into Instagram. Some signers (AltStore / Sideloadly) reject a
+# dylib whose own install name does not match the loader path, which was silently
+# leaving the dylib unloaded on resign.
+miOS_LDFLAGS = -Wl,-install_name,@executable_path/Frameworks/miOS.dylib
+
 include $(THEOS_MAKE_PATH)/tweak.mk
