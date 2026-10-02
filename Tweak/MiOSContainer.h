@@ -6,15 +6,13 @@
 // Everything is persisted inside Instagram's own sandbox (…/Documents/miOS),
 // optionally encrypted on disk (see MiOSCrypt).
 
-FOUNDATION_EXPORT NSString *MiOSRealHome(void);
-FOUNDATION_EXPORT void MiOSSetRealHome(NSString *home);
 FOUNDATION_EXPORT NSString *MiOSBaseDir(void);          // …/Documents/miOS
 
 @interface MiOSContainer : NSObject
 
 #pragma mark Identity
 
-@property (nonatomic, copy) NSString *identifier;      // UUID — also data subtree + keychain tag
+@property (nonatomic, copy) NSString *identifier;      // UUID — config key
 @property (nonatomic, copy) NSString *name;
 
 // A stable "persistent device id" (what Blaze calls persistentDeviceID): some apps cache this
@@ -166,7 +164,6 @@ FOUNDATION_EXPORT NSString *MiOSBaseDir(void);          // …/Documents/miOS
 
 #pragma mark - Runtime (consumed by hooks)
 
-- (NSString *)containerRootEnsureCreated:(BOOL)create;
 - (NSDictionary *)spoofPrefs;
 
 - (instancetype)initWithDictionary:(NSDictionary *)dict;

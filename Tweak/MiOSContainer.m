@@ -2,18 +2,8 @@
 #import "MiOSDeviceDB.h"
 #import "MiOSCrypt.h"
 
-#pragma mark - Real sandbox HOME (captured before container redirect)
-
-static NSString *gMiOSRealHome = nil;
-void MiOSSetRealHome(NSString *home) { if (home.length) gMiOSRealHome = [home copy]; }
-NSString *MiOSRealHome(void) {
-    if (gMiOSRealHome.length) return gMiOSRealHome;
-    const char *h = getenv("MIOS_REAL_HOME");
-    if (h) return [NSString stringWithUTF8String:h];
-    return NSHomeDirectory();
-}
 NSString *MiOSBaseDir(void) {
-    NSString *dir = [[MiOSRealHome() stringByAppendingPathComponent:@"Documents"]
+    NSString *dir = [[NSHomeDirectory() stringByAppendingPathComponent:@"Documents"]
                      stringByAppendingPathComponent:@"miOS"];
     [[NSFileManager defaultManager] createDirectoryAtPath:dir
                               withIntermediateDirectories:YES attributes:nil error:nil];
@@ -100,8 +90,6 @@ static NSString *kConfigPath(void) { return [MiOSBaseDir() stringByAppendingPath
     MiOSContainer *removed = nil;
     for (MiOSContainer *c in all) if ([c.identifier isEqualToString:containerID]) { removed = c; break; }
     if (!removed) return;
-    NSString *root = [removed containerRootEnsureCreated:NO];
-    if (root.length) [[NSFileManager defaultManager] removeItemAtPath:root error:nil];
     [all removeObject:removed];
     [self saveAll:all];
     if ([[self activeContainerID] isEqualToString:containerID]) {
@@ -112,29 +100,11 @@ static NSString *kConfigPath(void) { return [MiOSBaseDir() stringByAppendingPath
 
 + (void)resetAll {
     NSFileManager *fm = [NSFileManager defaultManager];
-    [fm removeItemAtPath:[MiOSBaseDir() stringByAppendingPathComponent:@"c"] error:nil];
     [fm removeItemAtPath:kListPath() error:nil];
     [fm removeItemAtPath:kConfigPath() error:nil];
-    // Keep the device password so re-adding containers remains readable.
 }
 
 #pragma mark - Runtime
-
-- (NSString *)containerRootEnsureCreated:(BOOL)create {
-    if (self.identifier.length == 0) return nil;
-    NSString *root = [[[MiOSBaseDir() stringByAppendingPathComponent:@"c"]
-                       stringByAppendingPathComponent:self.identifier] copy];
-    if (create) {
-        NSFileManager *fm = [NSFileManager defaultManager];
-        NSArray *subdirs = @[@"Documents", @"Library", @"Library/Preferences", @"Library/Caches",
-                             @"Library/Application Support", @"Library/Cookies", @"Library/SplashBoard",
-                             @"Library/WebKit", @"SystemData", @"tmp", @"StoreKit"];
-        for (NSString *sub in subdirs)
-            [fm createDirectoryAtPath:[root stringByAppendingPathComponent:sub]
-          withIntermediateDirectories:YES attributes:nil error:nil];
-    }
-    return root;
-}
 
 - (NSDictionary *)spoofPrefs { return [self toDictionary]; }
 
@@ -469,8 +439,8 @@ static NSString *randIPv4(void) {
     self.enableSpoofMail = YES;    self.mailAvailable = NO;
     self.enableSpoofMessage = YES; self.messageAvailable = NO;
     self.enableSpoofLowPowerMode = NO;
-    self.deviceName = [NSString stringWithFormat:@"iPhone"];
-    self.enableSpoofDeviceName = NO;
+    self.deviceName = @"iPhone";
+    self.enableSpoofDeviceName = YES;
 }
 
 + (MiOSContainer *)newRandomContainerNamed:(NSString *)name {

@@ -338,7 +338,6 @@ static UIImpactFeedbackGenerator *MiOSHaptic(void) {
     [a addAction:[UIAlertAction actionWithTitle:@"Activate & restart" style:UIAlertActionStyleDefault
         handler:^(UIAlertAction *x){
             [MiOSContainer setActiveContainerID:m.identifier];
-            [m containerRootEnsureCreated:YES];
             exit(0);
         }]];
     [a addAction:[UIAlertAction actionWithTitle:@"Edit fingerprint" style:UIAlertActionStyleDefault
@@ -883,30 +882,17 @@ typedef NS_ENUM(NSInteger, MiOSSpoofSec) {
     }];
 }
 - (void)_writeSnapshotAt:(CLLocationCoordinate2D)c {
-    NSString *root = [self.container containerRootEnsureCreated:YES];
-    if (!root.length) return;
-    for (NSNumber *style in @[@(MKMapTypeStandard), @(MKMapTypeSatellite), @(MKMapTypeHybrid)]) {
-        MKMapSnapshotOptions *opts = [MKMapSnapshotOptions new];
-        opts.region = MKCoordinateRegionMakeWithDistance(c, 1500, 1500);
-        opts.size = CGSizeMake(600, 400);
-        opts.mapType = (MKMapType)style.integerValue;
-        MKMapSnapshotter *snap = [[MKMapSnapshotter alloc] initWithOptions:opts];
-        [snap startWithCompletionHandler:^(MKMapSnapshot *s, NSError *e){
-            if (!s) return;
-            NSString *name = @"";
-            switch (style.integerValue) {
-                case MKMapTypeStandard: name = @"standard-snapshot.png"; break;
-                case MKMapTypeSatellite: name = @"satellite-snapshot.png"; break;
-                default: name = @"hybrid-snapshot.png"; break;
-            }
-            NSString *p = [root stringByAppendingPathComponent:name];
-            [UIImagePNGRepresentation(s.image) writeToFile:p atomically:YES];
-            if (style.integerValue == MKMapTypeStandard) {
-                NSString *def = [root stringByAppendingPathComponent:@"location-snapshot.png"];
-                [UIImagePNGRepresentation(s.image) writeToFile:def atomically:YES];
-            }
-        }];
-    }
+    NSString *root = MiOSBaseDir();
+    MKMapSnapshotOptions *opts = [MKMapSnapshotOptions new];
+    opts.region = MKCoordinateRegionMakeWithDistance(c, 1500, 1500);
+    opts.size = CGSizeMake(600, 400);
+    opts.mapType = MKMapTypeStandard;
+    MKMapSnapshotter *snap = [[MKMapSnapshotter alloc] initWithOptions:opts];
+    [snap startWithCompletionHandler:^(MKMapSnapshot *s, NSError *e){
+        if (!s) return;
+        NSString *p = [root stringByAppendingPathComponent:@"location-snapshot.png"];
+        [UIImagePNGRepresentation(s.image) writeToFile:p atomically:YES];
+    }];
 }
 @end
 
@@ -1140,29 +1126,43 @@ typedef NS_ENUM(NSInteger, MiOSSpoofSec) {
 
 #pragma mark - Floating button + installer
 
+// Dedicated overlay window that stays above all app windows (login, modals, etc.).
+// UIWindowLevelAlert + 1 keeps it on top; userInteractionEnabled passthrough lets
+// touches outside the button reach the app.
+
+@interface MiOSOverlayWindow : UIWindow
+@end
+@implementation MiOSOverlayWindow
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    for (UIView *sub in self.rootViewController.view.subviews) {
+        if (!sub.hidden && sub.alpha > 0 && sub.userInteractionEnabled &&
+            [sub pointInside:[self convertPoint:point toView:sub] withEvent:event])
+            return YES;
+    }
+    return NO;
+}
+@end
+
+@interface MiOSOverlayVC : UIViewController
+@end
+@implementation MiOSOverlayVC
+- (BOOL)shouldAutorotate { return YES; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskAll; }
+@end
+
 @interface MiOSFloatingButton : UIButton @end
 @implementation MiOSFloatingButton
-- (void)didMoveToWindow {
-    [super didMoveToWindow];
-    if (!self.window) return;
-    CGRect b = self.window.bounds;
-    CGFloat x = MIN(MAX(self.center.x, 30), b.size.width - 30);
-    CGFloat y = MIN(MAX(self.center.y, 80), b.size.height - 80);
-    self.center = CGPointMake(x, y);
-}
 @end
 
 @implementation MiOSUI
 
+static MiOSOverlayWindow *gOverlayWindow = nil;
 static MiOSFloatingButton *gButton = nil;
 static BOOL gInstalled = NO;
 
 + (void)install {
     if (gInstalled) return;
     gInstalled = YES;
-    // Attach on every event that can bring a window to life: app foregrounded, scene connected,
-    // key window changed. Instagram uses UIScene on iOS 13+ so some runs never fire
-    // UIApplicationDidBecomeActive before the first scene is up.
     NSArray<NSNotificationName> *names = @[
         UIApplicationDidBecomeActiveNotification,
         UIApplicationDidFinishLaunchingNotification,
@@ -1173,80 +1173,95 @@ static BOOL gInstalled = NO;
         [[NSNotificationCenter defaultCenter] addObserverForName:n object:nil
             queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *_){ [self attachButton]; }];
     }
-    // Belt-and-suspenders: retry at 0.5s, 2s, 5s, 10s. Idempotent — a successful attach is a no-op.
     for (NSNumber *delay in @[@0.5, @2.0, @5.0, @10.0]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [self attachButton]; });
     }
 }
 
-+ (NSArray<UIWindow *> *)allWindows {
-    // On iOS 13+, UIApplication.windows is deprecated and can be empty — windows live on
-    // UIWindowScene instances instead. Walk every connected foreground-active scene.
-    NSMutableArray<UIWindow *> *out = [NSMutableArray array];
++ (UIWindowScene *)activeWindowScene {
     UIApplication *app = UIApplication.sharedApplication;
-    if ([app respondsToSelector:@selector(connectedScenes)]) {
-        for (UIScene *scene in app.connectedScenes) {
-            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-            if (scene.activationState == UISceneActivationStateUnattached) continue;
-            UIWindowScene *ws = (UIWindowScene *)scene;
-            for (UIWindow *w in ws.windows) if (w) [out addObject:w];
-        }
+    if (![app respondsToSelector:@selector(connectedScenes)]) return nil;
+    for (UIScene *s in app.connectedScenes) {
+        if (![s isKindOfClass:[UIWindowScene class]]) continue;
+        if (s.activationState == UISceneActivationStateForegroundActive) return (UIWindowScene *)s;
     }
-    // Fallback — some sandboxed signers hide connectedScenes behind entitlements.
-    for (UIWindow *w in app.windows) if (w && ![out containsObject:w]) [out addObject:w];
-    return out;
-}
-
-+ (UIWindow *)bestHostWindow {
-    NSArray<UIWindow *> *wins = [self allWindows];
-    for (UIWindow *w in wins) if (w.isKeyWindow) return w;
-    for (UIWindow *w in [wins reverseObjectEnumerator]) {
-        if (!w.hidden && w.alpha > 0 && w.bounds.size.width > 100) return w;
+    for (UIScene *s in app.connectedScenes) {
+        if (![s isKindOfClass:[UIWindowScene class]]) continue;
+        if (s.activationState != UISceneActivationStateUnattached) return (UIWindowScene *)s;
     }
-    return wins.lastObject;
+    return nil;
 }
 
 + (void)attachButton {
-    UIWindow *win = [self bestHostWindow];
-    if (!win) return;
-    if (gButton && gButton.window == win && gButton.superview) return;
-    [gButton removeFromSuperview];
+    if (gOverlayWindow && !gOverlayWindow.hidden && gButton && gButton.superview) return;
 
-    MiOSFloatingButton *b = [MiOSFloatingButton buttonWithType:UIButtonTypeCustom];
-    b.frame = CGRectMake(0, 0, 56, 56);
-    b.center = CGPointMake(win.bounds.size.width - 42, win.bounds.size.height * 0.4);
+    UIWindowScene *scene = [self activeWindowScene];
+    if (!scene && ![UIApplication.sharedApplication.windows count]) return;
 
-    CAGradientLayer *grad = [CAGradientLayer layer];
-    grad.frame = b.bounds;
-    grad.colors = @[(id)[MiOSTheme accent].CGColor, (id)[MiOSTheme accentSecondary].CGColor];
-    grad.startPoint = CGPointMake(0, 0); grad.endPoint = CGPointMake(1, 1);
-    grad.cornerRadius = 28;
-    [b.layer addSublayer:grad];
+    if (!gOverlayWindow) {
+        if (scene) {
+            gOverlayWindow = [[MiOSOverlayWindow alloc] initWithWindowScene:scene];
+        } else {
+            gOverlayWindow = [[MiOSOverlayWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+        }
+        gOverlayWindow.windowLevel = UIWindowLevelAlert + 1;
+        gOverlayWindow.backgroundColor = [UIColor clearColor];
+        gOverlayWindow.rootViewController = [MiOSOverlayVC new];
+        gOverlayWindow.rootViewController.view.backgroundColor = [UIColor clearColor];
+    } else if (scene && gOverlayWindow.windowScene != scene) {
+        gOverlayWindow.windowScene = scene;
+    }
 
-    UILabel *lbl = [UILabel new];
-    lbl.text = @"miOS";
-    lbl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
-    lbl.textColor = [UIColor whiteColor];
-    lbl.textAlignment = NSTextAlignmentCenter;
-    lbl.frame = b.bounds;
-    [b addSubview:lbl];
+    if (!gButton || !gButton.superview) {
+        [gButton removeFromSuperview];
 
-    b.layer.cornerRadius = 28;
-    b.layer.shadowColor = [UIColor blackColor].CGColor;
-    b.layer.shadowOpacity = 0.5; b.layer.shadowRadius = 10; b.layer.shadowOffset = CGSizeMake(0, 4);
-    [b addTarget:self action:@selector(present) forControlEvents:UIControlEventTouchUpInside];
-    [b addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
+        CGRect wb = gOverlayWindow.bounds;
+        MiOSFloatingButton *b = [MiOSFloatingButton buttonWithType:UIButtonTypeCustom];
+        b.frame = CGRectMake(0, 0, 56, 56);
+        b.center = CGPointMake(wb.size.width - 42, wb.size.height * 0.4);
 
-    [win addSubview:b];
-    gButton = b;
+        CAGradientLayer *grad = [CAGradientLayer layer];
+        grad.frame = b.bounds;
+        grad.colors = @[(id)[MiOSTheme accent].CGColor, (id)[MiOSTheme accentSecondary].CGColor];
+        grad.startPoint = CGPointMake(0, 0); grad.endPoint = CGPointMake(1, 1);
+        grad.cornerRadius = 28;
+        [b.layer addSublayer:grad];
+
+        UILabel *lbl = [UILabel new];
+        lbl.text = @"miOS";
+        lbl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
+        lbl.textColor = [UIColor whiteColor];
+        lbl.textAlignment = NSTextAlignmentCenter;
+        lbl.frame = b.bounds;
+        [b addSubview:lbl];
+
+        b.layer.cornerRadius = 28;
+        b.layer.shadowColor = [UIColor blackColor].CGColor;
+        b.layer.shadowOpacity = 0.5; b.layer.shadowRadius = 10; b.layer.shadowOffset = CGSizeMake(0, 4);
+        [b addTarget:self action:@selector(present) forControlEvents:UIControlEventTouchUpInside];
+        [b addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
+
+        [gOverlayWindow.rootViewController.view addSubview:b];
+        gButton = b;
+    }
+
+    gOverlayWindow.hidden = NO;
 }
+
 + (void)handlePan:(UIPanGestureRecognizer *)pan {
     UIView *b = pan.view;
     CGPoint tr = [pan translationInView:b.superview];
     b.center = CGPointMake(b.center.x + tr.x, b.center.y + tr.y);
     [pan setTranslation:CGPointZero inView:b.superview];
+    if (pan.state == UIGestureRecognizerStateEnded) {
+        CGRect bounds = b.superview.bounds;
+        CGFloat x = MIN(MAX(b.center.x, 30), bounds.size.width - 30);
+        CGFloat y = MIN(MAX(b.center.y, 60), bounds.size.height - 60);
+        [UIView animateWithDuration:0.2 animations:^{ b.center = CGPointMake(x, y); }];
+    }
 }
+
 + (void)present {
     UIViewController *top = MiOSTopVC();
     if (!top || top.presentedViewController) return;

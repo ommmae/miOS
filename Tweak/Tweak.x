@@ -1,7 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <CoreLocation/CoreLocation.h>
 #import <UIKit/UIKit.h>
-#import <Security/Security.h>
 #import <objc/runtime.h>
 #import <dlfcn.h>
 #import <sys/sysctl.h>
@@ -12,9 +11,6 @@
 #import <ifaddrs.h>
 #import <net/if.h>
 #import <errno.h>
-#import <mach-o/loader.h>
-#import <mach-o/fat.h>
-#import <libkern/OSByteOrder.h>
 #import "MiOSContainer.h"
 #import "MiOSUI.h"
 
@@ -65,7 +61,7 @@ typedef CFDictionaryRef (*CNCopyCurrentNetworkInfo_t)(CFStringRef interfaceName)
 
 static NSDictionary *gSpoof = nil;
 static NSString *gContainerUUID = nil;
-static NSString *gKcPrefix = nil;
+
 
 // Cached, allocation-free spoof values
 static BOOL      gDeviceSpoofActive = NO;
@@ -483,133 +479,8 @@ static FILE *hook_fopen(const char *p, const char *m) {
 %end
 // end DetectionHooks
 
-// MARK: - Keychain namespacing (per-container isolation inside the app's own access group)
-
-static OSStatus (*orig_SecItemAdd)(CFDictionaryRef, CFTypeRef *);
-static OSStatus (*orig_SecItemCopyMatching)(CFDictionaryRef, CFTypeRef *);
-static OSStatus (*orig_SecItemUpdate)(CFDictionaryRef, CFDictionaryRef);
-static OSStatus (*orig_SecItemDelete)(CFDictionaryRef);
-
-static NSArray *kcPrefixedKeys(void) {
-    return @[(__bridge id)kSecAttrService, (__bridge id)kSecAttrServer, (__bridge id)kSecAttrAccount];
-}
-static NSDictionary *kcApplyPrefix(CFDictionaryRef dict, BOOL *modified) {
-    if (!dict) return nil;
-    NSMutableDictionary *copy = [(__bridge NSDictionary *)dict mutableCopy];
-    BOOL changed = NO;
-    for (id k in kcPrefixedKeys()) {
-        id v = copy[k];
-        if ([v isKindOfClass:[NSString class]] && ![v hasPrefix:gKcPrefix]) {
-            copy[k] = [gKcPrefix stringByAppendingString:v]; changed = YES;
-        }
-    }
-    if (modified) *modified = changed;
-    return copy;
-}
-static id kcStripObject(id obj) {
-    if ([obj isKindOfClass:[NSArray class]]) {
-        NSMutableArray *out = [NSMutableArray arrayWithCapacity:[obj count]];
-        for (id i in obj) [out addObject:kcStripObject(i)];
-        return out;
-    }
-    if ([obj isKindOfClass:[NSDictionary class]]) {
-        NSMutableDictionary *out = [obj mutableCopy];
-        for (id k in kcPrefixedKeys()) {
-            id v = out[k];
-            if ([v isKindOfClass:[NSString class]] && [v hasPrefix:gKcPrefix])
-                out[k] = [v substringFromIndex:gKcPrefix.length];
-        }
-        return out;
-    }
-    return obj;
-}
-static void kcStripResult(CFTypeRef *r) {
-    if (!r || !*r) return;
-    id o = (__bridge id)*r;
-    if (![o isKindOfClass:[NSArray class]] && ![o isKindOfClass:[NSDictionary class]]) return;
-    id s = kcStripObject(o);
-    CFRelease(*r); *r = (__bridge_retained CFTypeRef)s;
-}
-static OSStatus new_SecItemAdd(CFDictionaryRef a, CFTypeRef *r) {
-    BOOL m = NO; NSDictionary *c = kcApplyPrefix(a, &m);
-    if (!m) return orig_SecItemAdd(a, r);
-    OSStatus s = orig_SecItemAdd((__bridge CFDictionaryRef)c, r);
-    return s == errSecParam ? orig_SecItemAdd(a, r) : s;
-}
-static OSStatus new_SecItemCopyMatching(CFDictionaryRef q, CFTypeRef *r) {
-    BOOL m = NO; NSDictionary *c = kcApplyPrefix(q, &m);
-    if (!m) return orig_SecItemCopyMatching(q, r);
-    OSStatus s = orig_SecItemCopyMatching((__bridge CFDictionaryRef)c, r);
-    if (s == errSecParam) return orig_SecItemCopyMatching(q, r);
-    if (s == errSecSuccess) kcStripResult(r);
-    return s;
-}
-static OSStatus new_SecItemUpdate(CFDictionaryRef q, CFDictionaryRef u) {
-    BOOL m = NO; NSDictionary *c = kcApplyPrefix(q, &m); NSDictionary *uc = kcApplyPrefix(u, NULL);
-    if (!m) return orig_SecItemUpdate(q, u);
-    OSStatus s = orig_SecItemUpdate((__bridge CFDictionaryRef)c, (__bridge CFDictionaryRef)uc);
-    return s == errSecParam ? orig_SecItemUpdate(q, u) : s;
-}
-static OSStatus new_SecItemDelete(CFDictionaryRef q) {
-    BOOL m = NO; NSDictionary *c = kcApplyPrefix(q, &m);
-    if (!m) return orig_SecItemDelete(q);
-    OSStatus s = orig_SecItemDelete((__bridge CFDictionaryRef)c);
-    return s == errSecParam ? orig_SecItemDelete(q) : s;
-}
-static void miosInitKeychainNamespace(void) {
-    MSHookFunction((void *)SecItemAdd, (void *)new_SecItemAdd, (void **)&orig_SecItemAdd);
-    MSHookFunction((void *)SecItemCopyMatching, (void *)new_SecItemCopyMatching, (void **)&orig_SecItemCopyMatching);
-    MSHookFunction((void *)SecItemUpdate, (void *)new_SecItemUpdate, (void **)&orig_SecItemUpdate);
-    MSHookFunction((void *)SecItemDelete, (void *)new_SecItemDelete, (void **)&orig_SecItemDelete);
-}
-
-// MARK: - Container filesystem isolation (CFFIXED_USER_HOME + home-API hooks)
-
-static NSString *gRealHome = nil;
-static NSString *gContainerRoot = nil;
-
-static NSString *(*orig_NSHomeDirectory)(void) = NULL;
-static NSArray<NSString *> *(*orig_NSSearchPath)(NSUInteger, NSUInteger, BOOL) = NULL;
-static NSString *(*orig_NSTemporaryDirectory)(void) = NULL;
-static CFURLRef (*orig_CFCopyHomeDirectoryURL)(void) = NULL;
-
-static NSString *miosRemap(NSString *p) {
-    if (gContainerRoot.length == 0 || p.length == 0) return p;
-    if ([p hasPrefix:gContainerRoot]) return p;
-    if ([p isEqualToString:gRealHome]) return gContainerRoot;
-    NSString *slash = [gRealHome stringByAppendingString:@"/"];
-    if ([p hasPrefix:slash])
-        return [gContainerRoot stringByAppendingString:[p substringFromIndex:gRealHome.length]];
-    return p;
-}
-static NSString *new_NSHomeDirectory(void) { return gContainerRoot.length ? gContainerRoot : orig_NSHomeDirectory(); }
-static NSString *new_NSTemporaryDirectory(void) { return miosRemap(orig_NSTemporaryDirectory()); }
-static NSArray<NSString *> *new_NSSearchPath(NSUInteger d, NSUInteger m, BOOL e) {
-    NSArray *o = orig_NSSearchPath(d, m, e);
-    if (gContainerRoot.length == 0) return o;
-    NSMutableArray *r = [NSMutableArray arrayWithCapacity:o.count];
-    for (NSString *p in o) [r addObject:miosRemap(p)];
-    return r;
-}
-static CFURLRef new_CFCopyHomeDirectoryURL(void) {
-    if (gContainerRoot.length)
-        return CFURLCreateWithFileSystemPath(kCFAllocatorDefault,
-            (__bridge CFStringRef)gContainerRoot, kCFURLPOSIXPathStyle, true);
-    return orig_CFCopyHomeDirectoryURL ? orig_CFCopyHomeDirectoryURL() : NULL;
-}
-static void miosInstallContainerFS(MiOSContainer *c) {
-    gContainerRoot = [[c containerRootEnsureCreated:YES] copy];
-    if (!gContainerRoot.length) return;
-    setenv("CFFIXED_USER_HOME", gContainerRoot.UTF8String, 1);
-    setenv("HOME", gContainerRoot.UTF8String, 1);
-    setenv("TMPDIR", [gContainerRoot stringByAppendingPathComponent:@"tmp"].UTF8String, 1);
-    MSHookFunction((void *)NSHomeDirectory, (void *)new_NSHomeDirectory, (void **)&orig_NSHomeDirectory);
-    MSHookFunction((void *)NSTemporaryDirectory, (void *)new_NSTemporaryDirectory, (void **)&orig_NSTemporaryDirectory);
-    MSHookFunction((void *)NSSearchPathForDirectoriesInDomains, (void *)new_NSSearchPath, (void **)&orig_NSSearchPath);
-    void *cf = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_LAZY);
-    CFURLRef (*cfHome)(void) = cf ? (CFURLRef(*)(void))dlsym(cf, "CFCopyHomeDirectoryURL") : NULL;
-    if (cfHome) MSHookFunction((void *)cfHome, (void *)new_CFCopyHomeDirectoryURL, (void **)&orig_CFCopyHomeDirectoryURL);
-}
+// (Keychain namespacing and filesystem isolation removed — Blaze model:
+//  containers are spoof-config sets, not filesystem sandboxes.)
 
 // MARK: - sysctl / uname / CNCopy… / getifaddrs (allocation-free)
 
@@ -793,102 +664,7 @@ static void miosBuildSpoofCache(void) {
     }
 }
 
-// MARK: - Fresh-container reset (wipe cached App Group state once per container)
-
-#define MIOS_CS_EMBEDDED_SIGNATURE    0xfade0cc0
-#define MIOS_CS_EMBEDDED_ENTITLEMENTS 0xfade7171
-
-static NSData *miosReadAt(NSFileHandle *fh, unsigned long long off, unsigned long long len) {
-    @try { [fh seekToFileOffset:off]; return [fh readDataOfLength:(NSUInteger)len]; }
-    @catch (__unused id e) { return nil; }
-}
-static NSArray<NSString *> *miosSelfAppGroups(void) {
-    NSString *exe = [[NSBundle mainBundle] executablePath];
-    NSFileHandle *fh = exe ? [NSFileHandle fileHandleForReadingAtPath:exe] : nil;
-    if (!fh) return @[];
-    NSArray *result = @[];
-    @try {
-        unsigned long long sliceOff = 0;
-        NSData *m = miosReadAt(fh, 0, 4);
-        if (m.length < 4) { [fh closeFile]; return @[]; }
-        uint32_t magic = *(const uint32_t *)m.bytes;
-        if (magic == FAT_MAGIC || magic == FAT_CIGAM) {
-            NSData *fhd = miosReadAt(fh, 0, sizeof(struct fat_header));
-            uint32_t nfat = OSSwapBigToHostInt32(((const struct fat_header *)fhd.bytes)->nfat_arch);
-            NSData *archs = miosReadAt(fh, sizeof(struct fat_header), nfat * sizeof(struct fat_arch));
-            const struct fat_arch *a = (const struct fat_arch *)archs.bytes;
-            for (uint32_t i = 0; i < nfat; i++)
-                if (OSSwapBigToHostInt32(a[i].cputype) == CPU_TYPE_ARM64) { sliceOff = OSSwapBigToHostInt32(a[i].offset); break; }
-            if (!sliceOff && nfat) sliceOff = OSSwapBigToHostInt32(a[0].offset);
-            NSData *m2 = miosReadAt(fh, sliceOff, 4);
-            magic = m2.length >= 4 ? *(const uint32_t *)m2.bytes : 0;
-        }
-        if (magic != MH_MAGIC_64 && magic != MH_CIGAM_64) { [fh closeFile]; return @[]; }
-        NSData *hd = miosReadAt(fh, sliceOff, sizeof(struct mach_header_64));
-        const struct mach_header_64 *hdr = (const struct mach_header_64 *)hd.bytes;
-        uint32_t ncmds = hdr->ncmds, sizeofcmds = hdr->sizeofcmds;
-        NSData *cmds = miosReadAt(fh, sliceOff + sizeof(struct mach_header_64), sizeofcmds);
-        const uint8_t *p = cmds.bytes, *end = p + cmds.length;
-        uint32_t csOff = 0, csSize = 0;
-        for (uint32_t i = 0; i < ncmds && p + sizeof(struct load_command) <= end; i++) {
-            const struct load_command *lc = (const struct load_command *)p;
-            if (lc->cmd == LC_CODE_SIGNATURE) {
-                const struct linkedit_data_command *ld = (const struct linkedit_data_command *)p;
-                csOff = ld->dataoff; csSize = ld->datasize; break;
-            }
-            if (lc->cmdsize == 0) break;
-            p += lc->cmdsize;
-        }
-        if (csOff && csSize) {
-            NSData *sig = miosReadAt(fh, sliceOff + csOff, csSize);
-            const uint8_t *s = sig.bytes;
-            if (sig.length >= 12 && OSSwapBigToHostInt32(*(const uint32_t *)s) == MIOS_CS_EMBEDDED_SIGNATURE) {
-                uint32_t count = OSSwapBigToHostInt32(*(const uint32_t *)(s + 8));
-                for (uint32_t i = 0; i < count; i++) {
-                    const uint8_t *idx = s + 12 + i * 8;
-                    if (idx + 8 > s + sig.length) break;
-                    uint32_t bo = OSSwapBigToHostInt32(*(const uint32_t *)(idx + 4));
-                    if (bo + 8 > sig.length) continue;
-                    if (OSSwapBigToHostInt32(*(const uint32_t *)(s + bo)) == MIOS_CS_EMBEDDED_ENTITLEMENTS) {
-                        uint32_t bl = OSSwapBigToHostInt32(*(const uint32_t *)(s + bo + 4));
-                        if (bl > 8 && bo + bl <= sig.length) {
-                            NSData *pl = [NSData dataWithBytes:(s + bo + 8) length:(bl - 8)];
-                            id obj = [NSPropertyListSerialization propertyListWithData:pl options:0 format:NULL error:NULL];
-                            id g = [obj isKindOfClass:[NSDictionary class]] ? obj[@"com.apple.security.application-groups"] : nil;
-                            if ([g isKindOfClass:[NSArray class]]) result = g;
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-    } @catch (__unused id e) {}
-    [fh closeFile];
-    return result;
-}
-static void miosResetContainerCachesOnce(NSString *uuid) {
-    if (uuid.length == 0) return;
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSString *marker = [MiOSBaseDir() stringByAppendingPathComponent:
-                        [NSString stringWithFormat:@".init_%@", uuid]];
-    if ([fm fileExistsAtPath:marker]) return;
-    for (NSString *group in miosSelfAppGroups()) {
-        if (![group isKindOfClass:[NSString class]] || group.length == 0) continue;
-        @try {
-            NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:group];
-            [d removePersistentDomainForName:group]; [d synchronize];
-        } @catch (__unused id e) {}
-        NSURL *gurl = [fm containerURLForSecurityApplicationGroupIdentifier:group];
-        if (gurl) {
-            for (NSString *sub in @[@"Library/Preferences", @"Library/Caches", @"Library/Application Support"]) {
-                NSString *dir = [gurl.path stringByAppendingPathComponent:sub];
-                for (NSString *item in [fm contentsOfDirectoryAtPath:dir error:nil] ?: @[])
-                    [fm removeItemAtPath:[dir stringByAppendingPathComponent:item] error:nil];
-            }
-        }
-    }
-    [@"1" writeToFile:marker atomically:YES encoding:NSUTF8StringEncoding error:nil];
-}
+// (App Group wipe / Mach-O parser removed — Blaze does not wipe App Group state.)
 
 // MARK: - Constructor
 
@@ -897,31 +673,23 @@ static void miosResetContainerCachesOnce(NSString *uuid) {
         NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
         NSString *exeName = [[[NSBundle mainBundle] executablePath] lastPathComponent] ?: @"";
 
-        // Loose Instagram detection: signer-renamed bundle IDs still match. We only need to
-        // avoid firing inside SpringBoard or an unrelated app that happens to load this dylib.
         NSString *low = bundleID.lowercaseString;
         BOOL isInstagram = ([low containsString:@"burbn"] ||
                             [low containsString:@"instagram"] ||
                             [exeName isEqualToString:@"Instagram"]);
         if (!isInstagram) return;
 
-        gRealHome = [NSHomeDirectory() copy];
-        MiOSSetRealHome(gRealHome);
-        setenv("MIOS_REAL_HOME", gRealHome.UTF8String, 1);
+        NSString *home = [NSHomeDirectory() copy];
 
-        // Diagnostic: a 'did I load?' marker overwritten each launch. If none of these files
-        // exist after you open Instagram, dyld didn't load the dylib (signing stripped it,
-        // LC_LOAD_DYLIB wasn't injected, or ldid signature was invalid).
+        // Diagnostic marker — proves the dylib loaded.
         @try {
             NSString *diag = [NSString stringWithFormat:
-                @"miOS loaded at %@\nbundleID=%@\nexecutable=%@\nhome=%@\ntmp=%@\n",
-                [NSDate date], bundleID, exeName, gRealHome, NSTemporaryDirectory()];
+                @"miOS loaded at %@\nbundleID=%@\nexecutable=%@\nhome=%@\n",
+                [NSDate date], bundleID, exeName, home];
             NSArray<NSString *> *paths = @[
-                [[gRealHome stringByAppendingPathComponent:@"Documents"]
+                [[home stringByAppendingPathComponent:@"Documents"]
                     stringByAppendingPathComponent:@"mios-loaded.txt"],
                 [NSTemporaryDirectory() stringByAppendingPathComponent:@"mios-loaded.txt"],
-                [[gRealHome stringByAppendingPathComponent:@"Library/Caches"]
-                    stringByAppendingPathComponent:@"mios-loaded.txt"],
             ];
             for (NSString *path in paths) {
                 [[NSFileManager defaultManager] createDirectoryAtPath:[path stringByDeletingLastPathComponent]
@@ -930,32 +698,22 @@ static void miosResetContainerCachesOnce(NSString *uuid) {
             }
         } @catch (__unused id e) {}
 
-        [MiOSUI install];   // floating button is always available
+        [MiOSUI install];
 
         MiOSContainer *active = [MiOSContainer activeContainer];
-        if (!active || !active.enableSpoof) return;    // Spoof-mode off = pass through
+        if (!active || !active.enableSpoof) return;
 
         gContainerUUID = [active.identifier copy];
         gSpoof = [[active spoofPrefs] copy];
 
-        // 1. Filesystem isolation first.
-        miosInstallContainerFS(active);
+        // Blaze model: containers are spoof-config sets. No filesystem isolation,
+        // no keychain namespacing, no App Group wipes.
 
-        // 2. Keychain namespacing.
-        gKcPrefix = [NSString stringWithFormat:@"__mios_%@_", gContainerUUID];
-        miosInitKeychainNamespace();
-
-        // 3. First-launch App-Group wipe.
-        miosResetContainerCachesOnce(gContainerUUID);
-
-        // 4. Precompute cache + install hooks.
+        // Build allocation-free spoof cache + install Logos hooks.
         miosBuildSpoofCache();
-
-        // Every %hook is now flat (groups were removed); one %init binds them all.
-        // Each hook body still gates itself with the per-container spoofBool(...) check.
         %init;
 
-        // Low-level C hooks (always installed when device spoofing is active).
+        // Low-level C hooks.
         if (gDeviceSpoofActive) {
             MSHookFunction((void *)sysctlbyname, (void *)hook_sysctlbyname, (void **)&orig_sysctlbyname);
             MSHookFunction((void *)sysctl, (void *)hook_sysctl, (void **)&orig_sysctl);
@@ -968,7 +726,6 @@ static void miosResetContainerCachesOnce(NSString *uuid) {
             }
         }
 
-        // Wi-Fi info via CaptiveNetwork (if available).
         if (gcWifiInfo) {
             void *sc = dlopen("/System/Library/Frameworks/SystemConfiguration.framework/SystemConfiguration", RTLD_LAZY);
             if (sc) {
@@ -977,16 +734,36 @@ static void miosResetContainerCachesOnce(NSString *uuid) {
             }
         }
 
-        // getifaddrs — Wi-Fi + cellular IP spoofing.
         if (spoofBool(@"enableSpoofWiFi") || spoofBool(@"enableSpoofCellular"))
             MSHookFunction((void *)getifaddrs, (void *)hook_getifaddrs, (void **)&orig_getifaddrs);
 
-        // Anti-detection (filesystem probes).
         if (spoofBool(@"enableDisableDetection")) {
             MSHookFunction((void *)access, (void *)hook_access, (void **)&orig_access);
             MSHookFunction((void *)stat,   (void *)hook_stat,   (void **)&orig_stat);
             MSHookFunction((void *)lstat,  (void *)hook_lstat,  (void **)&orig_lstat);
             MSHookFunction((void *)fopen,  (void *)hook_fopen,  (void **)&orig_fopen);
         }
+
+        // Diagnostic dump: write all active spoof values so the user can verify.
+        @try {
+            NSString *debugPath = [MiOSBaseDir() stringByAppendingPathComponent:@"spoof-debug.plist"];
+            NSMutableDictionary *dump = [NSMutableDictionary dictionary];
+            dump[@"containerID"] = gContainerUUID ?: @"";
+            dump[@"containerName"] = active.name ?: @"";
+            dump[@"timestamp"] = [NSDate date].description;
+            dump[@"deviceSpoofActive"] = @(gDeviceSpoofActive);
+            dump[@"gcMachine"] = gcMachine ? @(gcMachine) : @"(none)";
+            dump[@"gcModel"] = gcModel ? @(gcModel) : @"(none)";
+            dump[@"gcMemsize"] = @(gcMemsize);
+            dump[@"gcCPU"] = @(gcCPU);
+            dump[@"gcKernelVersion"] = gcKernelVersion ? @(gcKernelVersion) : @"(none)";
+            dump[@"locationSpoofEnabled"] = @(locationSpoofEnabled());
+            if (locationSpoofEnabled()) {
+                dump[@"latitude"] = @(spoofDbl(@"latitude"));
+                dump[@"longitude"] = @(spoofDbl(@"longitude"));
+            }
+            dump[@"allSpoofPrefs"] = gSpoof ?: @{};
+            [dump writeToFile:debugPath atomically:YES];
+        } @catch (__unused id e) {}
     }
 }
