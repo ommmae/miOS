@@ -1,34 +1,32 @@
-INSTALL_TARGET_PROCESSES = SpringBoard
 ARCHS = arm64 arm64e
-TARGET := iphone:clang:latest:15.0
+TARGET := iphone:clang:latest:14.0
 
+# Build a rootless jailbreak .deb by default. For IPA injection you only need the built
+# .dylib (see docs/INJECTION.md) — THEOS_PACKAGE_SCHEME is irrelevant there.
 THEOS_PACKAGE_SCHEME ?= rootless
+
+INSTALL_TARGET_PROCESSES = Instagram
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = MiOSTweak
-MiOSTweak_FILES = $(wildcard MiOSTweak/*.x) $(wildcard MiOSTweak/*.m)
-MiOSTweak_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
-MiOSTweak_FRAMEWORKS = Foundation CoreFoundation UIKit CoreLocation Security CoreTelephony SystemConfiguration
+TWEAK_NAME = miOS
+miOS_FILES = \
+    Tweak/Tweak.x \
+    Tweak/MiOSContainer.m \
+    Tweak/MiOSDeviceDB.m \
+    Tweak/MiOSCrypt.m \
+    Tweak/MiOSTheme.m \
+    Tweak/MiOSUI.m
+miOS_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
+miOS_FRAMEWORKS = Foundation CoreFoundation UIKit CoreLocation MapKit \
+                  Security CoreTelephony SystemConfiguration CoreMotion \
+                  QuartzCore MessageUI
+miOS_PRIVATE_FRAMEWORKS =
 
-APPLICATION_NAME = MiOS
-MiOS_FILES = $(wildcard MiOSApp/*.m) $(wildcard MiOSApp/Controllers/*.m) $(wildcard MiOSApp/Views/*.m) $(wildcard MiOSApp/Models/*.m) $(wildcard MiOSApp/Utils/*.m) $(wildcard MiOSApp/UI/*.m)
-MiOS_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
-MiOS_FRAMEWORKS = UIKit Foundation CoreGraphics QuartzCore CoreLocation MapKit
-MiOS_PRIVATE_FRAMEWORKS = MobileCoreServices
-MiOS_INSTALL_PATH = /Applications
-MiOS_CODESIGN_FLAGS = -Sentitlements.plist
-
-TOOL_NAME = miosd
-miosd_FILES = $(wildcard MiOSDaemon/*.m)
-miosd_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
-miosd_FRAMEWORKS = Foundation
-miosd_CODESIGN_FLAGS = -Sdaemon-entitlements.plist
-miosd_INSTALL_PATH = /usr/libexec
+# Bake the sideloaded-IPA install path into LC_ID_DYLIB so it matches the LC_LOAD_DYLIB
+# the patcher inserts into Instagram. Some signers (AltStore / Sideloadly) reject a
+# dylib whose own install name does not match the loader path, which was silently
+# leaving the dylib unloaded on resign.
+miOS_LDFLAGS = -Wl,-install_name,@executable_path/Frameworks/miOS.dylib
 
 include $(THEOS_MAKE_PATH)/tweak.mk
-include $(THEOS_MAKE_PATH)/application.mk
-include $(THEOS_MAKE_PATH)/tool.mk
-
-after-install::
-	install.exec "/var/jb/usr/bin/launchctl bootstrap system /var/jb/Library/LaunchDaemons/com.mios.containerd.plist 2>/dev/null; /var/jb/usr/bin/launchctl kickstart -k system/com.mios.containerd 2>/dev/null; /var/jb/usr/bin/killall -9 miosd 2>/dev/null; /var/jb/usr/bin/killall -9 SpringBoard 2>/dev/null; killall -9 SpringBoard 2>/dev/null"
