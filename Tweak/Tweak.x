@@ -894,12 +894,34 @@ static void miosResetContainerCachesOnce(NSString *uuid) {
 
 %ctor {
     @autoreleasepool {
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
-        if (![bundleID isEqualToString:kIGBundleID]) return;
+        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+        NSString *exeName = [[[NSBundle mainBundle] executablePath] lastPathComponent] ?: @"";
+
+        // Loose Instagram detection: signer-renamed bundle IDs still match. We only need to
+        // avoid firing inside SpringBoard or an unrelated app that happens to load this dylib.
+        NSString *low = bundleID.lowercaseString;
+        BOOL isInstagram = ([low containsString:@"burbn"] ||
+                            [low containsString:@"instagram"] ||
+                            [exeName isEqualToString:@"Instagram"]);
+        if (!isInstagram) return;
 
         gRealHome = [NSHomeDirectory() copy];
         MiOSSetRealHome(gRealHome);
         setenv("MIOS_REAL_HOME", gRealHome.UTF8String, 1);
+
+        // Diagnostic: a 'did I load?' marker inside the app's own Documents, overwritten each
+        // launch. If this file is missing after you open Instagram, dyld didn't load the dylib
+        // (signing stripped it, LC_LOAD_DYLIB wasn't injected, or ldid signature was invalid).
+        @try {
+            NSString *diagPath = [[gRealHome stringByAppendingPathComponent:@"Documents"]
+                                  stringByAppendingPathComponent:@"mios-loaded.txt"];
+            NSString *diag = [NSString stringWithFormat:
+                @"miOS loaded at %@\nbundleID=%@\nexecutable=%@\nhome=%@\n",
+                [NSDate date], bundleID, exeName, gRealHome];
+            [[NSFileManager defaultManager] createDirectoryAtPath:[diagPath stringByDeletingLastPathComponent]
+                                      withIntermediateDirectories:YES attributes:nil error:nil];
+            [diag writeToFile:diagPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        } @catch (__unused id e) {}
 
         [MiOSUI install];   // floating button is always available
 

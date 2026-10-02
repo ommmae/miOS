@@ -1146,16 +1146,44 @@ static BOOL gInstalled = NO;
 + (void)install {
     if (gInstalled) return;
     gInstalled = YES;
-    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
-        object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n){ [self attachButton]; }];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self attachButton];
-    });
+    // Attach on every event that can bring a window to life: app foregrounded, scene connected,
+    // key window changed. Instagram uses UIScene on iOS 13+ so some runs never fire
+    // UIApplicationDidBecomeActive before the first scene is up.
+    NSArray<NSNotificationName> *names = @[
+        UIApplicationDidBecomeActiveNotification,
+        UIApplicationDidFinishLaunchingNotification,
+        UIWindowDidBecomeKeyNotification,
+        @"UISceneDidActivateNotification",
+    ];
+    for (NSNotificationName n in names) {
+        [[NSNotificationCenter defaultCenter] addObserverForName:n object:nil
+            queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *_){ [self attachButton]; }];
+    }
+    // Belt-and-suspenders: retry at 0.5s, 2s, 5s, 10s. Idempotent — a successful attach is a no-op.
+    for (NSNumber *delay in @[@0.5, @2.0, @5.0, @10.0]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [self attachButton]; });
+    }
 }
+
++ (UIWindow *)bestHostWindow {
+    // Prefer the key window; fall back to the frontmost visible window that is NOT a known
+    // overlay class (keyboard, status bar). Covers the UIScene case where no window is 'key'
+    // yet but one is already on-screen.
+    UIApplication *app = UIApplication.sharedApplication;
+    UIWindow *key = nil;
+    for (UIWindow *w in app.windows) if (w.isKeyWindow) { key = w; break; }
+    if (key) return key;
+    for (UIWindow *w in [app.windows reverseObjectEnumerator]) {
+        if (!w.hidden && w.alpha > 0 && w.bounds.size.width > 100) return w;
+    }
+    return app.windows.lastObject;
+}
+
 + (void)attachButton {
-    UIWindow *win = MiOSKeyWindow();
+    UIWindow *win = [self bestHostWindow];
     if (!win) return;
-    if (gButton && gButton.window == win) return;
+    if (gButton && gButton.window == win && gButton.superview) return;
     [gButton removeFromSuperview];
 
     MiOSFloatingButton *b = [MiOSFloatingButton buttonWithType:UIButtonTypeCustom];

@@ -101,9 +101,11 @@ DYLIB_RPATH="@executable_path/Frameworks/miOS.dylib"
 echo "[*] Injecting LC_LOAD_DYLIB → $DYLIB_RPATH"
 
 if [[ "$INJECT_TOOL" == "insert_dylib" ]]; then
-    # --weak so a missing dylib never crashes the app; --no-strip-codesig keeps the
-    # existing signature in place for us to strip explicitly below.
-    insert_dylib --inplace --all-yes --weak --no-strip-codesig \
+    # Non-weak load so if signing strips the dylib the app fails loudly instead of
+    # silently running without our hooks. Default behaviour of insert_dylib strips
+    # the stale Mach-O code signature — we want that so the re-signer sees a clean
+    # binary with no leftovers pointing at the pre-patch bytes.
+    insert_dylib --inplace --all-yes \
         "$DYLIB_RPATH" "$EXE_PATH" >/dev/null
 else
     # install_name_tool doesn't add new LC_LOAD_DYLIB commands outright, so we use
@@ -137,11 +139,28 @@ else
     echo "    For AltStore / Sideloadly, no signing step is needed here."
 fi
 
+# Sanity-check: confirm the LC_LOAD_DYLIB landed. We don't need otool for this — grep
+# the raw binary for the path we injected.
+if grep -q "$DYLIB_RPATH" "$EXE_PATH"; then
+    echo "[*] Verified LC_LOAD_DYLIB → $DYLIB_RPATH is present in the executable."
+else
+    echo "[!] WARNING: $DYLIB_RPATH not found in $EXE_PATH after injection." >&2
+    echo "    The signer may strip it; otool -L on the installed binary should still show it." >&2
+fi
+
 # Repack. Keep the top-level 'Payload/' prefix (iOS requires it).
 echo "[*] Repacking → $IPA_OUT"
 (cd "$WORK" && zip -q -r -X "$OLDPWD/$IPA_OUT" Payload)
 
 echo "[✓] Done: $IPA_OUT"
+echo
+echo "If the floating miOS button does NOT appear after install, verify in order:"
+echo "  1. On the device, look for Documents/mios-loaded.txt inside Instagram's data"
+echo "     container (TrollStore → Open from Files). If missing, the dylib never loaded"
+echo "     (signer stripped it, or ldid signature invalid — try reinstalling without AltStore)."
+echo "  2. Run: otool -L $EXE_PATH | grep miOS   # confirms LC_LOAD_DYLIB is still there."
+echo "  3. Check the installed app's bundle id — the dylib's ctor accepts any id containing"
+echo "     'burbn' or 'instagram'. If AltStore renamed it to something exotic, let us know."
 echo
 echo "Install options:"
 echo "  • TrollStore         — airdrop/open the IPA, no further signing."
